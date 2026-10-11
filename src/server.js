@@ -95,7 +95,7 @@ async function begin(){
  try{
   const id=randomUUID();intercom=id;
   console.log('Originating intercom:',endpoint,'channel:',id);
-  await ari('POST','/channels?'+new URLSearchParams({endpoint,app,appArgs:'intercom',channelId:id,timeout:'15',callerId:env.INTERCOM_CALLER_ID||'FreePBX Select <777>'}),{variables:{'PJSIP_HEADER(add,Call-Info)':'<sip:freepbxselect@localhost>;answer-after=0','PJSIP_HEADER(add,Alert-Info)':'<http://www.notused.com>;info=alert-autoanswer'}});
+  await ari('POST','/channels?'+new URLSearchParams({endpoint,app,appArgs:'intercom',channelId:id,timeout:'15',callerId:env.INTERCOM_CALLER_ID||'FreePBX Select <7000>'}),{variables:{'PJSIP_HEADER(add,Call-Info)':'<sip:freepbxselect@localhost>;answer-after=0','PJSIP_HEADER(add,Alert-Info)':'<http://www.notused.com>;info=alert-autoanswer'}});
   if(stamp!==session)return;
  }catch(e){console.error('Intercom originate failed for',endpoint,e);if(stamp===session){await hang();scheduleReconnect()}}
 }
