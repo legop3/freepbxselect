@@ -26,8 +26,8 @@ const q=x=>encodeURIComponent(x);
 // Synthesize phrases once. Cached G.711 audio makes contact navigation immediate
 // and prevents slow Piper model startup from delaying every button press.
 const speechCache=new Map();
-let playTimer=null,playToken=0,pendingSpeech=null;
-function stopAudio(){playToken++;if(playTimer)clearTimeout(playTimer);playTimer=null;pendingSpeech=null}
+let playTimer=null,playToken=0,pendingSpeech=null,playResolve=null;
+function stopAudio(){playToken++;if(playTimer)clearTimeout(playTimer);playTimer=null;pendingSpeech=null;if(playResolve){playResolve();playResolve=null}}
 function synthesize(text){
  if(speechCache.has(text))return speechCache.get(text);
  const promise=new Promise((resolve,reject)=>{
@@ -68,17 +68,21 @@ async function say(text){
   const audio=await synthesize(text);
   if(token!==playToken)return;
   if(!remote){pendingSpeech=text;return}
-  // 240 ms silence protects the beginning from receiver jitter and phone switching.
-  let step=0;const lead=12,frames=Math.ceil(audio.length/160),tail=6;
-  const start=Date.now();
-  const tick=()=>{
-   if(token!==playToken||!remote)return;
-   const offset=step<lead||step>=lead+frames?-1:(step-lead)*160;
-   sendPacket(audio,offset);step++;
-   if(step<lead+frames+tail)playTimer=setTimeout(tick,Math.max(1,start+step*20-Date.now()));
-   else playTimer=null;
-  };
-  tick();
+  // Packet pacing with initial silence, and enough tail to finish the final phoneme.
+  await new Promise(resolve=>{
+   playResolve=resolve;
+   let step=0;
+   const lead=20,frames=Math.ceil(audio.length/160),tail=16;
+   const start=Date.now();
+   function tick(){
+    if(token!==playToken||!remote){if(playResolve===resolve)playResolve=null;resolve();return}
+    const offset=step<lead||step>=lead+frames?-1:(step-lead)*160;
+    sendPacket(audio,offset);step++;
+    if(step<lead+frames+tail)playTimer=setTimeout(tick,Math.max(1,start+step*20-Date.now()));
+    else{playTimer=null;if(playResolve===resolve)playResolve=null;resolve()}
+   }
+   tick();
+  });
  }catch(e){console.error('Cannot announce',text,e.message)}
 }
 function scheduleReconnect(){if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{reconnectTimer=null;if(ready&&phase==='idle')begin().catch(console.error)},2000)}
@@ -100,11 +104,17 @@ async function returnToMenu(feedback=''){
 async function choose(){
  if(phase==='idle')return begin();
  if(phase==='menu'){
-  stopAudio();const stamp=session;setPhase('dialing');say('Calling '+config.contacts[index].name);
-  try{
-   const id=randomUUID();contactChannel=id;
-   await ari('POST','/channels?'+new URLSearchParams({endpoint:'Local/'+config.contacts[index].extension+'@'+(config.dialContext||'from-internal'),app,appArgs:'destination',channelId:id,timeout:'45'}));
-  }catch(e){console.error('Dial failed',e);if(stamp===session)await returnToMenu('Call failed')}
+  stopAudio();const stamp=session;const selected=config.contacts[index];setPhase('dialing');
+  // Finish saying the destination BEFORE originating. Otherwise the destination
+  // can answer immediately and bridge removal truncates "Calling ...".
+  void (async()=>{
+   await say('Calling '+selected.name);
+   if(stamp!==session||phase!=='dialing')return;
+   try{
+    const id=randomUUID();contactChannel=id;
+    await ari('POST','/channels?'+new URLSearchParams({endpoint:'Local/'+selected.extension+'@'+(config.dialContext||'from-internal'),app,appArgs:'destination',channelId:id,timeout:'45'}));
+   }catch(e){console.error('Dial failed',e);if(stamp===session&&phase==='dialing')await returnToMenu('Call failed')}
+  })();
   return;
  }
  if(phase==='dialing'||phase==='connected'){
