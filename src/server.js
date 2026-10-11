@@ -169,7 +169,7 @@ async function choose(){
  if(phase==='dialing'||phase==='connected'){
   const id=incoming||contactChannel;incoming=null;contactChannel=null;stopAudio();
   if(id)await ari('DELETE','/channels/'+q(id)).catch(console.error);
-  await returnToMenu();return;
+  await returnToMenu('Call ended');return;
  }
 }
 async function navigation(direction){
