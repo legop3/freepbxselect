@@ -50,7 +50,7 @@ function synthesize(text){
 }
 function preloadSpeech(){
  // Serial warming avoids launching too many expensive inference jobs at once.
- const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name),...config.contacts.map(x=>'Cancelled. '+x.name),...config.contacts.map(x=>'Call ended. '+x.name),...config.contacts.map(x=>'Call failed. '+x.name)];
+ const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name),'Call ended','Call failed'];
  (async()=>{for(const phrase of new Set(phrases))try{await synthesize(phrase)}catch{}})();
 }
 function sendPacket(audio,offset){
@@ -72,7 +72,7 @@ async function say(text){
   await new Promise(resolve=>{
    playResolve=resolve;
    let step=0;
-   const lead=20,frames=Math.ceil(audio.length/160),tail=16;
+   const lead=2,frames=Math.ceil(audio.length/160),tail=3;
    const start=Date.now();
    function tick(){
     if(token!==playToken||!remote){if(playResolve===resolve)playResolve=null;resolve();return}
@@ -84,6 +84,35 @@ async function say(text){
    tick();
   });
  }catch(e){console.error('Cannot announce',text,e.message)}
+}
+// Locally generated North American ringback cadence (440 + 480 Hz; 2s on, 4s off).
+// This is only audible in the menu bridge, not sent to the remote phone.
+function ulaw(sample){
+ let pcm=Math.max(-32635,Math.min(32635,Math.round(sample)));
+ const sign=pcm<0?0x80:0;
+ pcm=Math.abs(pcm)+132;
+ let exponent=7;
+ for(let mask=0x4000;exponent>0&&!(pcm&mask);mask>>=1)exponent--;
+ const mantissa=(pcm>>(exponent+3))&15;
+ return (~(sign|(exponent<<4)|mantissa))&255;
+}
+const ringFrame=Buffer.alloc(160);
+for(let i=0;i<160;i++){
+ const t=i/8000;
+ ringFrame[i]=ulaw(2600*(Math.sin(2*Math.PI*440*t)+Math.sin(2*Math.PI*480*t)));
+}
+function startRingback(stamp){
+ stopAudio();
+ const token=playToken,started=Date.now();
+ let step=0;
+ function tick(){
+  if(token!==playToken||session!==stamp||phase!=='dialing'||!remote)return;
+  const on=(step%300)<100;
+  sendPacket(on?ringFrame:Buffer.alloc(0),on?0:-1);
+  step++;
+  playTimer=setTimeout(tick,Math.max(1,started+step*20-Date.now()));
+ }
+ tick();
 }
 function scheduleReconnect(){if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{reconnectTimer=null;if(ready&&phase==='idle')begin().catch(console.error)},2000)}
 function clearSession(){stopAudio();remote=null;intercom=null;contactChannel=null;mediaChannel=null;bridge=null;incoming=null;session++;setPhase('idle')}
@@ -109,20 +138,20 @@ async function returnToMenu(feedback=''){
  const old=contactChannel;contactChannel=null;incoming=null;stopAudio();
  if(old)await ari('DELETE','/channels/'+q(old)).catch(()=>{});
  await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(mediaChannel)).catch(console.error);
- setPhase('menu');say(feedback?feedback+'. '+config.contacts[index].name:config.contacts[index].name);
+ setPhase('menu');say(feedback||config.contacts[index].name);
 }
 async function choose(){
  if(phase==='idle')return begin();
  if(phase==='menu'){
   stopAudio();const stamp=session;const selected=config.contacts[index];setPhase('dialing');
-  // Finish saying the destination BEFORE originating. Otherwise the destination
-  // can answer immediately and bridge removal truncates "Calling ...".
+  // Speak the selected name immediately, then use ringback until the call connects.
   void (async()=>{
    await say('Calling '+selected.name);
    if(stamp!==session||phase!=='dialing')return;
    try{
     const id=randomUUID();contactChannel=id;
     await ari('POST','/channels?'+new URLSearchParams({endpoint:'Local/'+selected.extension+'@'+(config.dialContext||'from-internal'),app,appArgs:'destination',channelId:id,timeout:'45'}));
+    if(stamp===session&&phase==='dialing')startRingback(stamp);
    }catch(e){console.error('Dial failed',e);if(stamp===session&&phase==='dialing')await returnToMenu('Call failed')}
   })();
   return;
@@ -130,7 +159,7 @@ async function choose(){
  if(phase==='dialing'||phase==='connected'){
   const id=incoming||contactChannel;incoming=null;contactChannel=null;stopAudio();
   if(id)await ari('DELETE','/channels/'+q(id)).catch(console.error);
-  await returnToMenu('Cancelled');return;
+  await returnToMenu();return;
  }
 }
 async function navigation(direction){
