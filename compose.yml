@@ -1,17 +1,23 @@
 services:
   freepbxselect:
     image: ghcr.io/legop3/freepbxselect:latest
+    container_name: freepbxselect
     restart: unless-stopped
-    # Host networking is necessary for Asterisk externalMedia's RTP stream.
+    # Linux host networking allows Asterisk to send RTP to this server.
     network_mode: host
     environment:
       PORT: "3000"
       RTP_PORT: "40000"
-      RTP_HOST: "${RTP_HOST:?Set to the Docker host LAN IP reachable from Asterisk}"
-      ARI_URL: "${ARI_URL:?e.g. http://192.168.0.25:8088/ari}"
-      ARI_USER: "${ARI_USER:?}"
-      ARI_PASSWORD: "${ARI_PASSWORD:?}"
-      API_KEY: "${API_KEY:?}"
-      INTERCOM_ENDPOINT: "${INTERCOM_ENDPOINT:-PJSIP/777}"
-    volumes:
-      - ./config.json:/app/config.json:ro
+      # IP address of this Docker host, reachable from FreePBX:
+      RTP_HOST: "192.168.0.100"
+      # Asterisk ARI connection:
+      ARI_URL: "http://192.168.0.25:8088/ari"
+      ARI_USER: "freepbxselect"
+      ARI_PASSWORD: "change-me"
+      # Currently required by the application for HTTP controls:
+      API_KEY: "change-me"
+      # Phone that auto-answers:
+      INTERCOM_ENDPOINT: "PJSIP/777"
+      # Contacts appear in this order. Change names/extensions as needed:
+      CONTACTS_JSON: >-
+        {"dialContext":"from-internal","contacts":[{"name":"Living Room","extension":"111"},{"name":"Alex","extension":"42"},{"name":"Front Desk","extension":"822"}]}
