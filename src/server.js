@@ -26,15 +26,15 @@ const q=x=>encodeURIComponent(x);
 // Synthesize phrases once. Cached G.711 audio makes contact navigation immediate
 // and prevents slow Piper model startup from delaying every button press.
 const speechCache=new Map();
+let speechQueue=Promise.resolve();
 // One continuous RTP clock, independent of speech and call state.
 let playToken=0,playResolve=null,currentAudio=null,currentOffset=0,ringback=false,ringStep=0;
 function stopAudio(){
  playToken++;currentAudio=null;currentOffset=0;ringback=false;ringStep=0;
  if(playResolve){const done=playResolve;playResolve=null;done()}
 }
-function synthesize(text){
- if(speechCache.has(text))return speechCache.get(text);
- const promise=new Promise((resolve,reject)=>{
+function synthesizeNow(text){
+ return new Promise((resolve,reject)=>{
   const synth=spawn('/opt/piper/bin/piper',['--model',env.PIPER_MODEL||'/opt/voices/en_US-lessac-medium.onnx','--output-raw'],{stdio:['pipe','pipe','pipe']});
   const ff=spawn('ffmpeg',['-hide_banner','-loglevel','error','-f','s16le','-ar',env.PIPER_SAMPLE_RATE||'22050','-ac','1','-i','pipe:0','-f','mulaw','-ar','8000','-ac','1','pipe:1'],{stdio:['pipe','pipe','pipe']});
   const data=[];let completed=false;let stderr='';
@@ -48,6 +48,13 @@ function synthesize(text){
   ff.stdout.on('data',x=>data.push(x));
   ff.on('close',code=>{if(code!==0)return finish(new Error('Piper/FFmpeg failed: '+stderr));const output=Buffer.concat(data);if(!output.length)return finish(new Error('Piper generated empty audio'));finish(null,output)});
  });
+}
+function synthesize(text){
+ if(speechCache.has(text))return speechCache.get(text);
+ // A single FIFO queue prevents requests during startup from competing with
+ // the complete preload. Every startup phrase gets its promise immediately.
+ const promise=speechQueue.then(()=>synthesizeNow(text));
+ speechQueue=promise.catch(()=>{});
  speechCache.set(text,promise);
  promise.catch(e=>{if(speechCache.get(text)===promise)speechCache.delete(text);console.error('TTS:',text,e.message)});
  return promise;
@@ -56,8 +63,12 @@ async function preloadSpeech(){
  // Warm the speech cache in the background; never delay the intercom call.
  // Serial synthesis avoids launching many Piper processes at once.
  const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name+', press again to cancel.'),'3','2','1',...config.contacts.map(x=>'Call ended. '+x.name),'Call ended','Call failed','Incoming call'];
- for(const phrase of new Set(phrases))await synthesize(phrase);
- console.log('All TTS announcements preloaded:',new Set(phrases).size);
+ // Enqueue ALL speech immediately, without waiting for an individual phrase.
+ // Menu requests share these exact promises; none start a second Piper process.
+ const jobs=[...new Set(phrases)].map(phrase=>synthesize(phrase));
+ const results=await Promise.allSettled(jobs);
+ const failures=results.filter(result=>result.status==='rejected').length;
+ console.log('Startup TTS preload complete:',jobs.length-failures,'ready,',failures,'failed');
 }
 // Synthesis runs in the background; failures are logged but don't block the phone.
 void preloadSpeech().catch(e=>console.error('TTS preloading failed:',e));
