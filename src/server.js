@@ -52,11 +52,16 @@ function synthesize(text){
  promise.catch(e=>{if(speechCache.get(text)===promise)speechCache.delete(text);console.error('TTS:',text,e.message)});
  return promise;
 }
-function preloadSpeech(){
- // Serial warming avoids launching too many expensive inference jobs at once.
+async function preloadSpeech(){
+ // The intercom must not ring until every menu/call phrase is synthesized.
+ // Warming serially avoids running multiple heavyweight Piper processes at once.
  const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name),...config.contacts.map(x=>'Call ended. '+x.name),'Call ended','Call failed'];
- (async()=>{for(const phrase of new Set(phrases))try{await synthesize(phrase)}catch{}})();
+ for(const phrase of new Set(phrases))await synthesize(phrase);
+ console.log('All TTS announcements preloaded:',new Set(phrases).size);
 }
+// Start warming on process startup, independently of the ARI connection.
+// A failure prevents dialing rather than silently falling back to slow live synthesis.
+const speechReady=preloadSpeech().then(()=>true,e=>{console.error('TTS preloading failed:',e);return false});
 function sendPacket(audio,offset){
  if(!remote)return;
  const packet=Buffer.alloc(172,0xff);packet[0]=0x80;packet[1]=0;
@@ -130,6 +135,10 @@ async function hang(){const ids=[contactChannel,incoming,intercom,mediaChannel].
 async function begin(){
  if(phase!=='idle'||!ready)return;
  const stamp=++session,endpoint=env.INTERCOM_ENDPOINT||'PJSIP/777';
+ setPhase('preparing-audio');
+ const loaded=await speechReady;
+ if(stamp!==session||!ready)return;
+ if(!loaded){setPhase('audio-error');return}
  setPhase('calling-intercom');
  try{
   const id=randomUUID();intercom=id;
@@ -217,7 +226,6 @@ async function onEvent(ev){
 }
 function connect(){const u=new URL(ariUrl);u.protocol=u.protocol==='https:'?'wss:':'ws:';u.pathname=u.pathname.replace(/\/$/,'')+'/events';u.search=new URLSearchParams({app,api_key:env.ARI_USER+':'+env.ARI_PASSWORD}).toString();ws=new WebSocket(u);ws.on('open',()=>{ready=true;notify();scheduleReconnect()});ws.on('message',raw=>{try{onEvent(JSON.parse(raw.toString())).catch(console.error)}catch(e){console.error(e)}});ws.on('close',()=>{ready=false;notify();if(phase!=='idle')hang().catch(console.error);setTimeout(connect,3000)});ws.on('error',e=>console.error('ARI websocket',e.message))}
 rtp.on('message',(_,rinfo)=>{if(mediaChannel&&!remote)remote={address:rinfo.address,port:rinfo.port}});rtp.bind(rtpPort);
-preloadSpeech();
 const html=fs.readFileSync(new URL('./public/index.html',import.meta.url));
 let queue=Promise.resolve();
 const server=http.createServer((req,res)=>{const url=new URL(req.url,'http://localhost');const send=(code,obj)=>{res.writeHead(code,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(obj))};
