@@ -134,8 +134,12 @@ async function choose(){
  }
 }
 async function navigation(direction){
- if(phase!=='menu')return;
- index=(index+direction+config.contacts.length)%config.contacts.length;notify();say(config.contacts[index].name);
+ // Selection belongs to the controller, not the SIP call. Never freeze the UI
+ // because an endpoint is ringing, busy, unavailable, or reconnecting.
+ if(phase==='dialing'||phase==='connected'||phase==='incoming')return;
+ index=(index+direction+config.contacts.length)%config.contacts.length;
+ notify();
+ if(phase==='menu')say(config.contacts[index].name);
 }
 async function handleIncoming(id){
  if(!bridge||!intercom||!mediaChannel||incoming||phase==='connected'||phase==='dialing'){
