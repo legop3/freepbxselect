@@ -55,7 +55,7 @@ function synthesize(text){
 async function preloadSpeech(){
  // The intercom must not ring until every menu/call phrase is synthesized.
  // Warming serially avoids running multiple heavyweight Piper processes at once.
- const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name),...config.contacts.map(x=>'Call ended. '+x.name),'Call ended','Call failed','Incoming call'];
+ const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name+', press again to cancel.'),'3','2','1',...config.contacts.map(x=>'Call ended. '+x.name),'Call ended','Call failed','Incoming call'];
  for(const phrase of new Set(phrases))await synthesize(phrase);
  console.log('All TTS announcements preloaded:',new Set(phrases).size);
 }
@@ -162,17 +162,34 @@ async function returnToMenu(feedback=''){
 async function choose(){
  if(phase==='idle')return begin();
  if(phase==='menu'){
-  stopAudio();const stamp=session;const selected=config.contacts[index];setPhase('dialing');
-  // Speak the selected name immediately, then use ringback until the call connects.
+  stopAudio();
+  const stamp=session,selected=config.contacts[index];
+  setPhase('preparing-call');
+  // Don't originate a SIP call until the entire warning and countdown finish.
+  // Every phrase was synthesized before the intercom session began.
   void (async()=>{
-   await say('Calling '+selected.name);
-   if(stamp!==session||phase!=='dialing')return;
+   const active=()=>stamp===session&&phase==='preparing-call';
+   await say('Calling '+selected.name+', press again to cancel.');
+   if(!active())return;
+   for(const number of ['3','2','1']){
+    await say(number);
+    if(!active())return;
+   }
+   if(!active())return;
+   setPhase('dialing');
    try{
     const id=randomUUID();contactChannel=id;
     await ari('POST','/channels?'+new URLSearchParams({endpoint:'Local/'+selected.extension+'@'+(config.dialContext||'from-internal'),app,appArgs:'destination',channelId:id,timeout:'45',callerId:env.CONTACT_CALLER_ID||'FreePBX Select <7000>'}));
     if(stamp===session&&phase==='dialing')startRingback(stamp);
    }catch(e){console.error('Dial failed',e);if(stamp===session&&phase==='dialing')await returnToMenu('Call failed')}
-  })();
+  })().catch(e=>console.error('Pre-call announcement failed',e));
+  return;
+ }
+ if(phase==='preparing-call'){
+  // Cancelling during speech/countdown must never originate the destination.
+  stopAudio();
+  setPhase('menu');
+  void say(config.contacts[index].name);
   return;
  }
  if(phase==='dialing'||phase==='connected'){
@@ -184,13 +201,13 @@ async function choose(){
 async function navigation(direction){
  // Selection belongs to the controller, not the SIP call. Never freeze the UI
  // because an endpoint is ringing, busy, unavailable, or reconnecting.
- if(phase==='dialing'||phase==='connected'||phase==='incoming')return;
+ if(phase==='preparing-call'||phase==='dialing'||phase==='connected'||phase==='incoming')return;
  index=(index+direction+config.contacts.length)%config.contacts.length;
  notify();
  if(phase==='menu')say(config.contacts[index].name);
 }
 async function handleIncoming(id){
- if(!bridge||!intercom||!mediaChannel||incoming||phase==='connected'||phase==='dialing'){
+ if(!bridge||!intercom||!mediaChannel||incoming||phase==='connected'||phase==='dialing'||phase==='preparing-call'){
   // Return to the dialplan fallback instead of leaving the caller stuck.
   await ari('POST','/channels/'+q(id)+'/continue?context=freepbxselect-fallback&extension=s&priority=1').catch(console.error);
   return;
