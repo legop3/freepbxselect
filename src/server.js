@@ -55,7 +55,7 @@ function synthesize(text){
 async function preloadSpeech(){
  // The intercom must not ring until every menu/call phrase is synthesized.
  // Warming serially avoids running multiple heavyweight Piper processes at once.
- const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name+', press again to cancel.'),...config.contacts.map(x=>'Call ended. '+x.name),'Call ended','Call failed','Incoming call'];
+ const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name+', press again to cancel.'),'3','2','1',...config.contacts.map(x=>'Call ended. '+x.name),'Call ended','Call failed','Incoming call'];
  for(const phrase of new Set(phrases))await synthesize(phrase);
  console.log('All TTS announcements preloaded:',new Set(phrases).size);
 }
@@ -164,27 +164,39 @@ async function choose(){
  if(phase==='menu'){
   stopAudio();
   const stamp=session,selected=config.contacts[index];
-  setPhase('dialing');
-  // Begin TTS without delaying the actual call. On answer, the normal
-  // StasisStart handler stops the announcement and leaves the RTP bridge alive.
-  const announcement=say('Calling '+selected.name+', press again to cancel.');
-  void announcement.then(()=>{
-   if(stamp===session&&phase==='dialing')startRingback(stamp);
-  });
-  // Don't block the button-command queue on an ARI network request:
-  // the next Select press must be able to cancel immediately.
+  setPhase('preparing-call');
+  // Keep Select responsive. The countdown uses fixed one-second ticks;
+  // initiating the call never waits for the last TTS clip to finish.
   void (async()=>{
+   const active=()=>stamp===session&&phase==='preparing-call';
+   await say('Calling '+selected.name+', press again to cancel.');
+   if(!active())return;
+   for(const number of ['3','2','1']){
+    const started=Date.now();
+    void say(number);
+    await new Promise(resolve=>setTimeout(resolve,Math.max(0,1000-(Date.now()-started))));
+    if(!active())return;
+   }
+   if(!active())return;
+   stopAudio();
+   setPhase('dialing');
+   const id=randomUUID();contactChannel=id;
    try{
-    const id=randomUUID();contactChannel=id;
     await ari('POST','/channels?'+new URLSearchParams({endpoint:'Local/'+selected.extension+'@'+(config.dialContext||'from-internal'),app,appArgs:'destination',channelId:id,timeout:'45',callerId:env.CONTACT_CALLER_ID||'FreePBX Select <7000>'}));
-    // If cancelled while originate was in flight, make sure no call survives.
     if(stamp!==session||contactChannel!==id)
      await ari('DELETE','/channels/'+q(id)).catch(()=>{});
+    else if(phase==='dialing')startRingback(stamp);
    }catch(e){
     console.error('Dial failed',e);
     if(stamp===session&&phase==='dialing')await returnToMenu('Call failed');
    }
-  })();
+  })().catch(e=>console.error('Pre-call sequence failed',e));
+  return;
+ }
+ if(phase==='preparing-call'){
+  stopAudio();
+  setPhase('menu');
+  void say('Call ended. '+config.contacts[index].name);
   return;
  }
  if(phase==='dialing'||phase==='connected'){
@@ -196,13 +208,13 @@ async function choose(){
 async function navigation(direction){
  // Selection belongs to the controller, not the SIP call. Never freeze the UI
  // because an endpoint is ringing, busy, unavailable, or reconnecting.
- if(phase==='dialing'||phase==='connected'||phase==='incoming')return;
+ if(phase==='preparing-call'||phase==='dialing'||phase==='connected'||phase==='incoming')return;
  index=(index+direction+config.contacts.length)%config.contacts.length;
  notify();
  if(phase==='menu')say(config.contacts[index].name);
 }
 async function handleIncoming(id){
- if(!bridge||!intercom||!mediaChannel||incoming||phase==='connected'||phase==='dialing'){
+ if(!bridge||!intercom||!mediaChannel||incoming||phase==='connected'||phase==='dialing'||phase==='preparing-call'){
   // Return to the dialplan fallback instead of leaving the caller stuck.
   await ari('POST','/channels/'+q(id)+'/continue?context=freepbxselect-fallback&extension=s&priority=1').catch(console.error);
   return;
