@@ -169,7 +169,7 @@ async function choose(){
    if(stamp!==session||phase!=='dialing')return;
    try{
     const id=randomUUID();contactChannel=id;
-    await ari('POST','/channels?'+new URLSearchParams({endpoint:'Local/'+selected.extension+'@'+(config.dialContext||'from-internal'),app,appArgs:'destination',channelId:id,timeout:'45'}));
+    await ari('POST','/channels?'+new URLSearchParams({endpoint:'Local/'+selected.extension+'@'+(config.dialContext||'from-internal'),app,appArgs:'destination',channelId:id,timeout:'45',callerId:env.CONTACT_CALLER_ID||'FreePBX Select <7000>'}));
     if(stamp===session&&phase==='dialing')startRingback(stamp);
    }catch(e){console.error('Dial failed',e);if(stamp===session&&phase==='dialing')await returnToMenu('Call failed')}
   })();
