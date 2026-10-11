@@ -23,21 +23,63 @@ function notify(){const data='data: '+JSON.stringify(state())+'\n\n';for(const r
 function setPhase(p){phase=p;notify()}
 async function ari(method,path,body){const res=await fetch(ariUrl+path,{method,headers:{Authorization:'Basic '+basic,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});if(!res.ok)throw Error('ARI '+method+' '+path+' '+res.status+' '+(await res.text()).slice(0,200));const raw=await res.text();return raw?JSON.parse(raw):null}
 const q=x=>encodeURIComponent(x);
-function stopAudio(){audioToken++;if(audioJob){audioJob.kill();audioJob=null}}
-function say(text){stopAudio();if(!remote)return;const token=audioToken;
- // ffmpeg converts synthesised WAV to 8kHz, G.711 mu-law RTP payload.
- const synth=spawn('/opt/piper/bin/piper',['--model',env.PIPER_MODEL||'/opt/voices/en_US-lessac-medium.onnx','--output-raw'],{stdio:['pipe','pipe','pipe']});
- synth.stdin.end(text+'\n');
- synth.stderr.on('data',data=>console.error('Piper:',data.toString().trim()));
- const ff=spawn('ffmpeg',['-hide_banner','-loglevel','error','-f','s16le','-ar',env.PIPER_SAMPLE_RATE||'22050','-ac','1','-i','pipe:0','-f','mulaw','-ar','8000','-ac','1','pipe:1'],{stdio:['pipe','pipe','ignore']});
- audioJob=ff;synth.stdout.pipe(ff.stdin);
- ff.on('error',e=>{console.error('FFmpeg:',e.message);if(audioJob===ff)audioJob=null});synth.on('error',e=>{console.error('Piper:',e.message);ff.stdin.destroy()});let chunks=[],offset=0,ended=false;
- ff.stdout.on('data',x=>chunks.push(x));
- ff.on('close',()=>{ended=true;if(audioJob===ff)audioJob=null});
- let next=Date.now();
- const tick=()=>{if(token!==audioToken)return;const buf=Buffer.concat(chunks);if(buf.length-offset>=160){const pkt=Buffer.alloc(172);pkt[0]=0x80;pkt[1]=0;pkt.writeUInt16BE(seq++&65535,2);pkt.writeUInt32BE(timestamp>>>0,4);pkt.writeUInt32BE(ssrc>>>0,8);buf.copy(pkt,12,offset,offset+160);offset+=160;timestamp+=160;rtp.send(pkt,remote.port,remote.address)}
- if(ended&&buf.length-offset<160)return;
- next+=20;setTimeout(tick,Math.max(0,next-Date.now()))};tick();
+// Synthesize phrases once. Cached G.711 audio makes contact navigation immediate
+// and prevents slow Piper model startup from delaying every button press.
+const speechCache=new Map();
+let playTimer=null,playToken=0,pendingSpeech=null;
+function stopAudio(){playToken++;if(playTimer)clearTimeout(playTimer);playTimer=null;pendingSpeech=null}
+function synthesize(text){
+ if(speechCache.has(text))return speechCache.get(text);
+ const promise=new Promise((resolve,reject)=>{
+  const synth=spawn('/opt/piper/bin/piper',['--model',env.PIPER_MODEL||'/opt/voices/en_US-lessac-medium.onnx','--output-raw'],{stdio:['pipe','pipe','pipe']});
+  const ff=spawn('ffmpeg',['-hide_banner','-loglevel','error','-f','s16le','-ar',env.PIPER_SAMPLE_RATE||'22050','-ac','1','-i','pipe:0','-f','mulaw','-ar','8000','-ac','1','pipe:1'],{stdio:['pipe','pipe','pipe']});
+  const data=[];let completed=false;let stderr='';
+  const timer=setTimeout(()=>finish(new Error('Speech synthesis timed out')),30000);
+  function finish(err,buffer){if(completed)return;completed=true;clearTimeout(timer);if(err){synth.kill();ff.kill();reject(err)}else resolve(buffer)}
+  synth.on('error',e=>finish(e));ff.on('error',e=>finish(e));
+  synth.stderr.on('data',x=>{stderr+=x.toString().slice(0,1000)});
+  ff.stderr.on('data',x=>{stderr+=x.toString().slice(0,1000)});
+  synth.stdout.pipe(ff.stdin);
+  synth.stdin.end(text+'\\n');
+  ff.stdout.on('data',x=>data.push(x));
+  ff.on('close',code=>{if(code!==0)return finish(new Error('Piper/FFmpeg failed: '+stderr));const output=Buffer.concat(data);if(!output.length)return finish(new Error('Piper generated empty audio'));finish(null,output)});
+ });
+ speechCache.set(text,promise);
+ promise.catch(e=>{if(speechCache.get(text)===promise)speechCache.delete(text);console.error('TTS:',text,e.message)});
+ return promise;
+}
+function preloadSpeech(){
+ // Serial warming avoids launching too many expensive inference jobs at once.
+ const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name),'Cancelling','Call ended','Call failed'];
+ (async()=>{for(const phrase of new Set(phrases))try{await synthesize(phrase)}catch{}})();
+}
+function sendPacket(audio,offset){
+ if(!remote)return;
+ const packet=Buffer.alloc(172,0xff);packet[0]=0x80;packet[1]=0;
+ packet.writeUInt16BE(seq++&65535,2);packet.writeUInt32BE(timestamp>>>0,4);
+ packet.writeUInt32BE(ssrc>>>0,8);timestamp=(timestamp+160)>>>0;
+ if(offset>=0)audio.copy(packet,12,offset,Math.min(offset+160,audio.length));
+ rtp.send(packet,remote.port,remote.address);
+}
+async function say(text){
+ stopAudio();
+ const token=playToken;
+ try{
+  const audio=await synthesize(text);
+  if(token!==playToken)return;
+  if(!remote){pendingSpeech=text;return}
+  // 240 ms silence protects the beginning from receiver jitter and phone switching.
+  let step=0;const lead=12,frames=Math.ceil(audio.length/160),tail=6;
+  const start=Date.now();
+  const tick=()=>{
+   if(token!==playToken||!remote)return;
+   const offset=step<lead||step>=lead+frames?-1:(step-lead)*160;
+   sendPacket(audio,offset);step++;
+   if(step<lead+frames+tail)playTimer=setTimeout(tick,Math.max(1,start+step*20-Date.now()));
+   else playTimer=null;
+  };
+  tick();
+ }catch(e){console.error('Cannot announce',text,e.message)}
 }
 function scheduleReconnect(){if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{reconnectTimer=null;if(ready&&phase==='idle')begin().catch(console.error)},2000)}
 function clearSession(){stopAudio();remote=null;intercom=null;contactChannel=null;mediaChannel=null;bridge=null;incoming=null;session++;setPhase('idle')}
@@ -58,16 +100,15 @@ async function returnToMenu(){
 async function choose(){
  if(phase==='idle')return begin();
  if(phase==='menu'){
-  stopAudio();const stamp=session;setPhase('dialing');
+  stopAudio();const stamp=session;setPhase('dialing');say('Calling '+config.contacts[index].name);
   try{
    const id=randomUUID();contactChannel=id;
-   await ari('POST','/bridges/'+q(bridge)+'/removeChannel?channel='+q(mediaChannel)).catch(()=>{});
    await ari('POST','/channels?'+new URLSearchParams({endpoint:'Local/'+config.contacts[index].extension+'@'+(config.dialContext||'from-internal'),app,appArgs:'destination',channelId:id,timeout:'45'}));
   }catch(e){console.error('Dial failed',e);if(stamp===session)await returnToMenu()}
   return;
  }
  if(phase==='dialing'||phase==='connected'){
-  const id=incoming||contactChannel;incoming=null;contactChannel=null;
+  const id=incoming||contactChannel;incoming=null;contactChannel=null;stopAudio();say('Cancelling');
   if(id)await ari('DELETE','/channels/'+q(id)).catch(console.error);
   await returnToMenu();return;
  }
@@ -101,7 +142,7 @@ async function onEvent(ev){
   if(id===intercom){await enterMenu();return}
   if(id===contactChannel&&bridge&&phase==='dialing'){
    await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(id));
-   setPhase('connected');
+   stopAudio();await ari('POST','/bridges/'+q(bridge)+'/removeChannel?channel='+q(mediaChannel)).catch(()=>{});setPhase('connected');
   }
  }else if(ev.type==='StasisEnd'||ev.type==='ChannelDestroyed'){
   if(id===intercom){await hang();scheduleReconnect()}
@@ -111,7 +152,8 @@ async function onEvent(ev){
  }
 }
 function connect(){const u=new URL(ariUrl);u.protocol=u.protocol==='https:'?'wss:':'ws:';u.pathname=u.pathname.replace(/\/$/,'')+'/events';u.search=new URLSearchParams({app,api_key:env.ARI_USER+':'+env.ARI_PASSWORD}).toString();ws=new WebSocket(u);ws.on('open',()=>{ready=true;notify();scheduleReconnect()});ws.on('message',raw=>{try{onEvent(JSON.parse(raw.toString())).catch(console.error)}catch(e){console.error(e)}});ws.on('close',()=>{ready=false;notify();if(phase!=='idle')hang().catch(console.error);setTimeout(connect,3000)});ws.on('error',e=>console.error('ARI websocket',e.message))}
-rtp.on('message',(_,rinfo)=>{if(mediaChannel&&!remote)remote={address:rinfo.address,port:rinfo.port}});rtp.bind(rtpPort);
+rtp.on('message',(_,rinfo)=>{if(mediaChannel&&!remote){remote={address:rinfo.address,port:rinfo.port};if(pendingSpeech){const name=pendingSpeech;pendingSpeech=null;say(name)}}});rtp.bind(rtpPort);
+preloadSpeech();
 const html=fs.readFileSync(new URL('./public/index.html',import.meta.url));
 let queue=Promise.resolve();
 const server=http.createServer((req,res)=>{const url=new URL(req.url,'http://localhost');const send=(code,obj)=>{res.writeHead(code,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(obj))};
