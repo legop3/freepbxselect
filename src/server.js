@@ -53,15 +53,14 @@ function synthesize(text){
  return promise;
 }
 async function preloadSpeech(){
- // The intercom must not ring until every menu/call phrase is synthesized.
- // Warming serially avoids running multiple heavyweight Piper processes at once.
+ // Warm the speech cache in the background; never delay the intercom call.
+ // Serial synthesis avoids launching many Piper processes at once.
  const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name+', press again to cancel.'),'3','2','1',...config.contacts.map(x=>'Call ended. '+x.name),'Call ended','Call failed','Incoming call'];
  for(const phrase of new Set(phrases))await synthesize(phrase);
  console.log('All TTS announcements preloaded:',new Set(phrases).size);
 }
-// Start warming on process startup, independently of the ARI connection.
-// A failure prevents dialing rather than silently falling back to slow live synthesis.
-const speechReady=preloadSpeech().then(()=>true,e=>{console.error('TTS preloading failed:',e);return false});
+// Synthesis runs in the background; failures are logged but don't block the phone.
+void preloadSpeech().catch(e=>console.error('TTS preloading failed:',e));
 function sendPacket(audio,offset){
  if(!remote)return;
  const packet=Buffer.alloc(172,0xff);packet[0]=0x80;packet[1]=0;
@@ -135,10 +134,6 @@ async function hang(){const ids=[contactChannel,incoming,intercom,mediaChannel].
 async function begin(){
  if(phase!=='idle'||!ready)return;
  const stamp=++session,endpoint=env.INTERCOM_ENDPOINT||'PJSIP/777';
- setPhase('preparing-audio');
- const loaded=await speechReady;
- if(stamp!==session||!ready)return;
- if(!loaded){setPhase('audio-error');return}
  setPhase('calling-intercom');
  try{
   const id=randomUUID();intercom=id;
@@ -165,20 +160,19 @@ async function choose(){
   stopAudio();
   const stamp=session,selected=config.contacts[index];
   setPhase('preparing-call');
-  // Keep Select responsive. The countdown uses fixed one-second ticks;
-  // initiating the call never waits for the last TTS clip to finish.
+  // Keep Select responsive while preserving the spoken warning and countdown.
   void (async()=>{
    const active=()=>stamp===session&&phase==='preparing-call';
    await say('Calling '+selected.name+', press again to cancel.');
    if(!active())return;
    for(const number of ['3','2','1']){
     const started=Date.now();
-    void say(number);
+    await say(number);
+    if(!active())return;
     await new Promise(resolve=>setTimeout(resolve,Math.max(0,1000-(Date.now()-started))));
     if(!active())return;
    }
    if(!active())return;
-   stopAudio();
    setPhase('dialing');
    const id=randomUUID();contactChannel=id;
    try{
