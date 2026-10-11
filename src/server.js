@@ -26,8 +26,12 @@ const q=x=>encodeURIComponent(x);
 // Synthesize phrases once. Cached G.711 audio makes contact navigation immediate
 // and prevents slow Piper model startup from delaying every button press.
 const speechCache=new Map();
-let playTimer=null,playToken=0,pendingSpeech=null,playResolve=null;
-function stopAudio(){playToken++;if(playTimer)clearTimeout(playTimer);playTimer=null;pendingSpeech=null;if(playResolve){playResolve();playResolve=null}}
+// One continuous RTP clock, independent of speech and call state.
+let playToken=0,playResolve=null,currentAudio=null,currentOffset=0,ringback=false,ringStep=0;
+function stopAudio(){
+ playToken++;currentAudio=null;currentOffset=0;ringback=false;ringStep=0;
+ if(playResolve){const done=playResolve;playResolve=null;done()}
+}
 function synthesize(text){
  if(speechCache.has(text))return speechCache.get(text);
  const promise=new Promise((resolve,reject)=>{
@@ -61,58 +65,58 @@ function sendPacket(audio,offset){
  if(offset>=0)audio.copy(packet,12,offset,Math.min(offset+160,audio.length));
  rtp.send(packet,remote.port,remote.address);
 }
-async function say(text){
- stopAudio();
- const token=playToken;
- try{
-  const audio=await synthesize(text);
-  if(token!==playToken)return;
-  if(!remote){pendingSpeech=text;return}
-  // Packet pacing with initial silence, and enough tail to finish the final phoneme.
-  await new Promise(resolve=>{
-   playResolve=resolve;
-   let step=0;
-   const lead=2,frames=Math.ceil(audio.length/160),tail=3;
-   const start=Date.now();
-   function tick(){
-    if(token!==playToken||!remote){if(playResolve===resolve)playResolve=null;resolve();return}
-    const offset=step<lead||step>=lead+frames?-1:(step-lead)*160;
-    sendPacket(audio,offset);step++;
-    if(step<lead+frames+tail)playTimer=setTimeout(tick,Math.max(1,start+step*20-Date.now()));
-    else{playTimer=null;if(playResolve===resolve)playResolve=null;resolve()}
-   }
-   tick();
-  });
- }catch(e){console.error('Cannot announce',text,e.message)}
-}
-// Locally generated North American ringback cadence (440 + 480 Hz; 2s on, 4s off).
-// This is only audible in the menu bridge, not sent to the remote phone.
+// Standard G.711 mu-law conversion for the locally generated ringback tone.
 function ulaw(sample){
  let pcm=Math.max(-32635,Math.min(32635,Math.round(sample)));
  const sign=pcm<0?0x80:0;
  pcm=Math.abs(pcm)+132;
  let exponent=7;
  for(let mask=0x4000;exponent>0&&!(pcm&mask);mask>>=1)exponent--;
- const mantissa=(pcm>>(exponent+3))&15;
- return (~(sign|(exponent<<4)|mantissa))&255;
+ return (~(sign|(exponent<<4)|((pcm>>(exponent+3))&15)))&255;
 }
+// A phase-continuous, 20ms ringback frame (440 + 480 Hz).
 const ringFrame=Buffer.alloc(160);
-for(let i=0;i<160;i++){
- const t=i/8000;
- ringFrame[i]=ulaw(2600*(Math.sin(2*Math.PI*440*t)+Math.sin(2*Math.PI*480*t)));
+for(let i=0;i<160;i++)ringFrame[i]=ulaw(2600*(Math.sin(2*Math.PI*440*i/8000)+Math.sin(2*Math.PI*480*i/8000)));
+const silence=Buffer.alloc(160,0xff);
+let nextRtpAt=Date.now()+20;
+function rtpTick(){
+ // The RTP stream never stops while the external-media channel is alive.
+ // This keeps the phone jitter buffer warm, with no arbitrary speech padding.
+ if(remote&&mediaChannel){
+  let audio=silence,offset=0;
+  if(currentAudio){
+   audio=currentAudio;offset=currentOffset;currentOffset+=160;
+   if(currentOffset>=currentAudio.length){
+    currentAudio=null;currentOffset=0;
+    if(playResolve){const done=playResolve;playResolve=null;done()}
+   }
+  }else if(ringback&&phase==='dialing'){
+   if((ringStep%300)<100)audio=ringFrame;
+   ringStep++;
+  }
+  sendPacket(audio,offset);
+ }
+ nextRtpAt+=20;
+ // Never flood the network to catch up if the JS event loop was stalled.
+ if(nextRtpAt<Date.now())nextRtpAt=Date.now()+20;
+ setTimeout(rtpTick,Math.max(1,nextRtpAt-Date.now()));
+}
+setTimeout(rtpTick,20);
+async function say(text){
+ stopAudio();
+ const token=playToken;
+ try{
+  const audio=await synthesize(text);
+  if(token!==playToken)return;
+  return await new Promise(resolve=>{
+   if(token!==playToken){resolve();return}
+   playResolve=resolve;currentAudio=audio;currentOffset=0;
+  });
+ }catch(e){console.error('Cannot announce',text,e.message)}
 }
 function startRingback(stamp){
- stopAudio();
- const token=playToken,started=Date.now();
- let step=0;
- function tick(){
-  if(token!==playToken||session!==stamp||phase!=='dialing'||!remote)return;
-  const on=(step%300)<100;
-  sendPacket(on?ringFrame:Buffer.alloc(0),on?0:-1);
-  step++;
-  playTimer=setTimeout(tick,Math.max(1,started+step*20-Date.now()));
- }
- tick();
+ if(stamp!==session||phase!=='dialing')return;
+ stopAudio();ringback=true;ringStep=0;
 }
 function scheduleReconnect(){if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{reconnectTimer=null;if(ready&&phase==='idle')begin().catch(console.error)},2000)}
 function clearSession(){stopAudio();remote=null;intercom=null;contactChannel=null;mediaChannel=null;bridge=null;incoming=null;session++;setPhase('idle')}
@@ -137,7 +141,7 @@ async function returnToMenu(feedback=''){
  if(!bridge||!mediaChannel||!intercom)return;
  const old=contactChannel;contactChannel=null;incoming=null;stopAudio();
  if(old)await ari('DELETE','/channels/'+q(old)).catch(()=>{});
- await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(mediaChannel)).catch(console.error);
+ // The external media channel remains bridged throughout conversations.
  setPhase('menu');say(feedback||config.contacts[index].name);
 }
 async function choose(){
@@ -179,7 +183,6 @@ async function handleIncoming(id){
  incoming=id;stopAudio();setPhase('incoming');
  try{
   await ari('POST','/channels/'+q(id)+'/answer');
-  await ari('POST','/bridges/'+q(bridge)+'/removeChannel?channel='+q(mediaChannel)).catch(()=>{});
   await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(id));
   setPhase('connected');
  }catch(e){
@@ -197,7 +200,7 @@ async function onEvent(ev){
   if(id===intercom){await enterMenu();return}
   if(id===contactChannel&&bridge&&phase==='dialing'){
    await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(id));
-   stopAudio();await ari('POST','/bridges/'+q(bridge)+'/removeChannel?channel='+q(mediaChannel)).catch(()=>{});setPhase('connected');
+   stopAudio();setPhase('connected');
   }
  }else if(ev.type==='StasisEnd'||ev.type==='ChannelDestroyed'){
   if(id===intercom){await hang();scheduleReconnect()}
@@ -207,7 +210,7 @@ async function onEvent(ev){
  }
 }
 function connect(){const u=new URL(ariUrl);u.protocol=u.protocol==='https:'?'wss:':'ws:';u.pathname=u.pathname.replace(/\/$/,'')+'/events';u.search=new URLSearchParams({app,api_key:env.ARI_USER+':'+env.ARI_PASSWORD}).toString();ws=new WebSocket(u);ws.on('open',()=>{ready=true;notify();scheduleReconnect()});ws.on('message',raw=>{try{onEvent(JSON.parse(raw.toString())).catch(console.error)}catch(e){console.error(e)}});ws.on('close',()=>{ready=false;notify();if(phase!=='idle')hang().catch(console.error);setTimeout(connect,3000)});ws.on('error',e=>console.error('ARI websocket',e.message))}
-rtp.on('message',(_,rinfo)=>{if(mediaChannel&&!remote){remote={address:rinfo.address,port:rinfo.port};if(pendingSpeech){const name=pendingSpeech;pendingSpeech=null;say(name)}}});rtp.bind(rtpPort);
+rtp.on('message',(_,rinfo)=>{if(mediaChannel&&!remote)remote={address:rinfo.address,port:rinfo.port}});rtp.bind(rtpPort);
 preloadSpeech();
 const html=fs.readFileSync(new URL('./public/index.html',import.meta.url));
 let queue=Promise.resolve();
