@@ -55,7 +55,7 @@ function synthesize(text){
 async function preloadSpeech(){
  // The intercom must not ring until every menu/call phrase is synthesized.
  // Warming serially avoids running multiple heavyweight Piper processes at once.
- const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name),...config.contacts.map(x=>'Call ended. '+x.name),'Call ended','Call failed'];
+ const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name),...config.contacts.map(x=>'Call ended. '+x.name),'Call ended','Call failed','Incoming call'];
  for(const phrase of new Set(phrases))await synthesize(phrase);
  console.log('All TTS announcements preloaded:',new Set(phrases).size);
 }
@@ -196,8 +196,14 @@ async function handleIncoming(id){
   return;
  }
  incoming=id;stopAudio();setPhase('incoming');
+ const stamp=session;
  try{
+  // Announce to the intercom BEFORE answering or bridging the caller.
+  // The existing RTP media channel is already bridged to the intercom.
+  await say('Incoming call');
+  if(stamp!==session||incoming!==id||phase!=='incoming')return;
   await ari('POST','/channels/'+q(id)+'/answer');
+  if(stamp!==session||incoming!==id||phase!=='incoming')return;
   await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(id));
   setPhase('connected');
  }catch(e){
