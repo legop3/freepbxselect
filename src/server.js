@@ -75,8 +75,14 @@ function ulaw(sample){
  return (~(sign|(exponent<<4)|((pcm>>(exponent+3))&15)))&255;
 }
 // A phase-continuous, 20ms ringback frame (440 + 480 Hz).
-const ringFrame=Buffer.alloc(160);
-for(let i=0;i<160;i++)ringFrame[i]=ulaw(2600*(Math.sin(2*Math.PI*440*i/8000)+Math.sin(2*Math.PI*480*i/8000)));
+const ringFrames=Array.from({length:100},(_,frame)=>{
+ const pcm=Buffer.alloc(160);
+ for(let i=0;i<160;i++){
+  const t=(frame*160+i)/8000;
+  pcm[i]=ulaw(2600*(Math.sin(2*Math.PI*440*t)+Math.sin(2*Math.PI*480*t)));
+ }
+ return pcm;
+});
 const silence=Buffer.alloc(160,0xff);
 let nextRtpAt=Date.now()+20;
 function rtpTick(){
@@ -91,7 +97,7 @@ function rtpTick(){
     if(playResolve){const done=playResolve;playResolve=null;done()}
    }
   }else if(ringback&&phase==='dialing'){
-   if((ringStep%300)<100)audio=ringFrame;
+   if((ringStep%300)<100)audio=ringFrames[ringStep%300];
    ringStep++;
   }
   sendPacket(audio,offset);
