@@ -26,9 +26,12 @@ const q=x=>encodeURIComponent(x);
 function stopAudio(){audioToken++;if(audioJob){audioJob.kill();audioJob=null}}
 function say(text){stopAudio();if(!remote)return;const token=audioToken;
  // ffmpeg converts synthesised WAV to 8kHz, G.711 mu-law RTP payload.
- const synth=spawn('espeak-ng',['--stdout','-s','155',text],{stdio:['ignore','pipe','ignore']});
- const ff=spawn('ffmpeg',['-hide_banner','-loglevel','error','-i','pipe:0','-f','mulaw','-ar','8000','-ac','1','pipe:1'],{stdio:['pipe','pipe','ignore']});
- audioJob=ff;synth.stdout.pipe(ff.stdin);let chunks=[],offset=0,ended=false;
+ const synth=spawn('/opt/piper/bin/piper',['--model',env.PIPER_MODEL||'/opt/voices/en_US-lessac-medium.onnx','--output-raw'],{stdio:['pipe','pipe','pipe']});
+ synth.stdin.end(text+'\n');
+ synth.stderr.on('data',data=>console.error('Piper:',data.toString().trim()));
+ const ff=spawn('ffmpeg',['-hide_banner','-loglevel','error','-f','s16le','-ar',env.PIPER_SAMPLE_RATE||'22050','-ac','1','-i','pipe:0','-f','mulaw','-ar','8000','-ac','1','pipe:1'],{stdio:['pipe','pipe','ignore']});
+ audioJob=ff;synth.stdout.pipe(ff.stdin);
+ ff.on('error',e=>console.error('FFmpeg:',e));synth.on('error',e=>console.error('Piper:',e));let chunks=[],offset=0,ended=false;
  ff.stdout.on('data',x=>chunks.push(x));
  ff.on('close',()=>{ended=true;if(audioJob===ff)audioJob=null});
  let next=Date.now();
@@ -38,7 +41,7 @@ function say(text){stopAudio();if(!remote)return;const token=audioToken;
 }
 function clearSession(){stopAudio();remote=null;intercom=null;contactChannel=null;mediaChannel=null;bridge=null;session++;setPhase('idle')}
 async function hang(){const ids=[contactChannel,intercom,mediaChannel].filter(Boolean);const b=bridge;clearSession();await Promise.allSettled([...ids.map(id=>ari('DELETE','/channels/'+q(id))),...(b?[ari('DELETE','/bridges/'+q(b))]:[])])}
-async function begin(){if(phase!=='idle')return;const stamp=++session;setPhase('calling-intercom');try{const id=randomUUID();intercom=id;await ari('POST','/channels?'+new URLSearchParams({endpoint:env.INTERCOM_ENDPOINT||'PJSIP/777',app,appArgs:'intercom',channelId:id,timeout:'15'}));if(stamp!==session)return}catch(e){console.error('Call failed',e);if(stamp===session)await hang()}}
+async function begin(){if(phase!=='idle')return;const stamp=++session;setPhase('calling-intercom');try{const id=randomUUID();intercom=id;await ari('POST','/channels?'+new URLSearchParams({endpoint:env.INTERCOM_ENDPOINT||'PJSIP/777',app,appArgs:'intercom',channelId:id,timeout:'15'}),{variables:{'PJSIP_HEADER(add,Call-Info)':'<sip:freepbxselect@localhost>;answer-after=0','PJSIP_HEADER(add,Alert-Info)':'<http://www.notused.com>;info=alert-autoanswer'}});if(stamp!==session)return}catch(e){console.error('Call failed',e);if(stamp===session)await hang()}}
 async function enterMenu(){if(phase!=='calling-intercom'||!intercom)return;const stamp=session;
  try{bridge=randomUUID();await ari('POST','/bridges/'+q(bridge)+'?type=mixing');await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(intercom));
  mediaChannel=randomUUID();await ari('POST','/channels/externalMedia?'+new URLSearchParams({app,external_host:env.RTP_HOST+':'+rtpPort,format:'ulaw',channelId:mediaChannel,encapsulation:'rtp',transport:'udp',direction:'both'}));
