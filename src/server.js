@@ -16,7 +16,7 @@ for(const c of config.contacts)if(!c.name||!/^[0-9*#+-]+$/.test(c.extension))thr
 if(!/^[a-zA-Z0-9_-]+$/.test(config.dialContext||'from-internal'))throw Error('Invalid dialContext');
 const basic=Buffer.from(env.ARI_USER+':'+env.ARI_PASSWORD).toString('base64');
 let index=0,phase='idle',intercom=null,contactChannel=null,mediaChannel=null,bridge=null,session=0,remote=null;
-let audioJob=null,audioToken=0,ws=null,ready=false;
+let audioJob=null,audioToken=0,ws=null,ready=false,incoming=null,reconnectTimer=null;
 const clients=new Set();const rtp=dgram.createSocket('udp4');let seq=0,timestamp=0,ssrc=Math.floor(Math.random()*0xffffffff);
 function state(){return {name:config.contacts[index].name,index,phase,connected:ready,contacts:config.contacts.length}}
 function notify(){const data='data: '+JSON.stringify(state())+'\n\n';for(const res of clients)res.write(data)}
@@ -39,18 +39,78 @@ function say(text){stopAudio();if(!remote)return;const token=audioToken;
  if(ended&&buf.length-offset<160)return;
  next+=20;setTimeout(tick,Math.max(0,next-Date.now()))};tick();
 }
-function clearSession(){stopAudio();remote=null;intercom=null;contactChannel=null;mediaChannel=null;bridge=null;session++;setPhase('idle')}
-async function hang(){const ids=[contactChannel,intercom,mediaChannel].filter(Boolean);const b=bridge;clearSession();await Promise.allSettled([...ids.map(id=>ari('DELETE','/channels/'+q(id))),...(b?[ari('DELETE','/bridges/'+q(b))]:[])])}
-async function begin(){if(phase!=='idle')return;const stamp=++session;setPhase('calling-intercom');try{const id=randomUUID();intercom=id;await ari('POST','/channels?'+new URLSearchParams({endpoint:env.INTERCOM_ENDPOINT||'PJSIP/777',app,appArgs:'intercom',channelId:id,timeout:'15'}),{variables:{'PJSIP_HEADER(add,Call-Info)':'<sip:freepbxselect@localhost>;answer-after=0','PJSIP_HEADER(add,Alert-Info)':'<http://www.notused.com>;info=alert-autoanswer'}});if(stamp!==session)return}catch(e){console.error('Call failed',e);if(stamp===session)await hang()}}
+function scheduleReconnect(){if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{reconnectTimer=null;if(ready&&phase==='idle')begin().catch(console.error)},2000)}
+function clearSession(){stopAudio();remote=null;intercom=null;contactChannel=null;mediaChannel=null;bridge=null;incoming=null;session++;setPhase('idle')}
+async function hang(){const ids=[contactChannel,incoming,intercom,mediaChannel].filter(Boolean);const b=bridge;clearSession();await Promise.allSettled([...ids.map(id=>ari('DELETE','/channels/'+q(id))),...(b?[ari('DELETE','/bridges/'+q(b))]:[])])}
+async function begin(){if(phase!=='idle'||!ready)return;const stamp=++session;setPhase('calling-intercom');try{const id=randomUUID();intercom=id;await ari('POST','/channels?'+new URLSearchParams({endpoint:env.INTERCOM_ENDPOINT||'PJSIP/777',app,appArgs:'intercom',channelId:id,timeout:'15'}),{variables:{'PJSIP_HEADER(add,Call-Info)':'<sip:freepbxselect@localhost>;answer-after=0','PJSIP_HEADER(add,Alert-Info)':'<http://www.notused.com>;info=alert-autoanswer'}});if(stamp!==session)return}catch(e){console.error('Call failed',e);if(stamp===session){await hang();scheduleReconnect()}}}
 async function enterMenu(){if(phase!=='calling-intercom'||!intercom)return;const stamp=session;
  try{bridge=randomUUID();await ari('POST','/bridges/'+q(bridge)+'?type=mixing');await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(intercom));
  mediaChannel=randomUUID();await ari('POST','/channels/externalMedia?'+new URLSearchParams({app,external_host:env.RTP_HOST+':'+rtpPort,format:'ulaw',channelId:mediaChannel,encapsulation:'rtp',transport:'udp',direction:'both'}));
  if(stamp!==session)return;await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(mediaChannel));setPhase('menu');say(config.contacts[index].name)
- }catch(e){console.error('Menu setup failed',e);if(stamp===session)await hang()}}
-async function choose(){if(phase==='idle')return begin();if(phase==='menu'){stopAudio();const stamp=session;setPhase('dialing');try{const id=randomUUID();contactChannel=id;await ari('POST','/channels?'+new URLSearchParams({endpoint:'Local/'+config.contacts[index].extension+'@'+(config.dialContext||'from-internal'),app,appArgs:'destination',channelId:id,timeout:'45'}));}catch(e){console.error('Dial failed',e);if(stamp===session){contactChannel=null;setPhase('menu');say('Call failed')}}return}return hang()}
-async function navigation(direction){if(phase==='idle'){index=(index+direction+config.contacts.length)%config.contacts.length;notify();await begin();return}if(phase!=='menu')return;index=(index+direction+config.contacts.length)%config.contacts.length;notify();say(config.contacts[index].name)}
-async function onEvent(ev){if(ev.type==='StasisStart'){const id=ev.channel?.id;if(id===intercom)await enterMenu();else if(id===contactChannel&&bridge&&phase==='dialing'){await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(id));setPhase('connected')}}else if(ev.type==='StasisEnd'||ev.type==='ChannelDestroyed'){const id=ev.channel?.id;if(id===intercom){await hang()}else if(id===contactChannel){contactChannel=null;if(phase==='connected'||phase==='dialing'){setPhase('menu');say(config.contacts[index].name)}}else if(id===mediaChannel&&phase!=='idle'){await hang()}}}
-function connect(){const u=new URL(ariUrl);u.protocol=u.protocol==='https:'?'wss:':'ws:';u.pathname=u.pathname.replace(/\/$/,'')+'/events';u.search=new URLSearchParams({app,api_key:env.ARI_USER+':'+env.ARI_PASSWORD}).toString();ws=new WebSocket(u);ws.on('open',()=>{ready=true;notify()});ws.on('message',raw=>{try{onEvent(JSON.parse(raw.toString())).catch(console.error)}catch(e){console.error(e)}});ws.on('close',()=>{ready=false;notify();if(phase!=='idle')hang().catch(console.error);setTimeout(connect,3000)});ws.on('error',e=>console.error('ARI websocket',e.message))}
+ }catch(e){console.error('Menu setup failed',e);if(stamp===session){await hang();scheduleReconnect()}}}
+async function returnToMenu(){
+ if(!bridge||!mediaChannel||!intercom)return;
+ const old=contactChannel;contactChannel=null;incoming=null;stopAudio();
+ if(old)await ari('DELETE','/channels/'+q(old)).catch(()=>{});
+ await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(mediaChannel)).catch(console.error);
+ setPhase('menu');say(config.contacts[index].name);
+}
+async function choose(){
+ if(phase==='idle')return begin();
+ if(phase==='menu'){
+  stopAudio();const stamp=session;setPhase('dialing');
+  try{
+   const id=randomUUID();contactChannel=id;
+   await ari('POST','/bridges/'+q(bridge)+'/removeChannel?channel='+q(mediaChannel)).catch(()=>{});
+   await ari('POST','/channels?'+new URLSearchParams({endpoint:'Local/'+config.contacts[index].extension+'@'+(config.dialContext||'from-internal'),app,appArgs:'destination',channelId:id,timeout:'45'}));
+  }catch(e){console.error('Dial failed',e);if(stamp===session)await returnToMenu()}
+  return;
+ }
+ if(phase==='dialing'||phase==='connected'){
+  const id=incoming||contactChannel;incoming=null;contactChannel=null;
+  if(id)await ari('DELETE','/channels/'+q(id)).catch(console.error);
+  await returnToMenu();return;
+ }
+}
+async function navigation(direction){
+ if(phase!=='menu')return;
+ index=(index+direction+config.contacts.length)%config.contacts.length;notify();say(config.contacts[index].name);
+}
+async function handleIncoming(id){
+ if(!bridge||!intercom||!mediaChannel||incoming||phase==='connected'||phase==='dialing'){
+  // Return to the dialplan fallback instead of leaving the caller stuck.
+  await ari('POST','/channels/'+q(id)+'/continue?context=freepbxselect-fallback&extension=s&priority=1').catch(console.error);
+  return;
+ }
+ incoming=id;stopAudio();setPhase('incoming');
+ try{
+  await ari('POST','/channels/'+q(id)+'/answer');
+  await ari('POST','/bridges/'+q(bridge)+'/removeChannel?channel='+q(mediaChannel)).catch(()=>{});
+  await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(id));
+  setPhase('connected');
+ }catch(e){
+  console.error('Incoming bridge failed',e);incoming=null;
+  await ari('POST','/channels/'+q(id)+'/continue?context=freepbxselect-fallback&extension=s&priority=1').catch(console.error);
+  await returnToMenu();
+ }
+}
+async function onEvent(ev){
+ const id=ev.channel?.id;
+ if(ev.type==='StasisStart'){
+  if(ev.args?.[0]==='incoming'){await handleIncoming(id);return}
+  if(id===intercom){await enterMenu();return}
+  if(id===contactChannel&&bridge&&phase==='dialing'){
+   await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(id));
+   setPhase('connected');
+  }
+ }else if(ev.type==='StasisEnd'||ev.type==='ChannelDestroyed'){
+  if(id===intercom){await hang();scheduleReconnect()}
+  else if(id===incoming){incoming=null;await returnToMenu()}
+  else if(id===contactChannel){contactChannel=null;if(phase==='connected'||phase==='dialing')await returnToMenu()}
+  else if(id===mediaChannel&&phase!=='idle'){await hang();scheduleReconnect()}
+ }
+}
+function connect(){const u=new URL(ariUrl);u.protocol=u.protocol==='https:'?'wss:':'ws:';u.pathname=u.pathname.replace(/\/$/,'')+'/events';u.search=new URLSearchParams({app,api_key:env.ARI_USER+':'+env.ARI_PASSWORD}).toString();ws=new WebSocket(u);ws.on('open',()=>{ready=true;notify();scheduleReconnect()});ws.on('message',raw=>{try{onEvent(JSON.parse(raw.toString())).catch(console.error)}catch(e){console.error(e)}});ws.on('close',()=>{ready=false;notify();if(phase!=='idle')hang().catch(console.error);setTimeout(connect,3000)});ws.on('error',e=>console.error('ARI websocket',e.message))}
 rtp.on('message',(_,rinfo)=>{if(mediaChannel&&!remote)remote={address:rinfo.address,port:rinfo.port}});rtp.bind(rtpPort);
 const html=fs.readFileSync(new URL('./public/index.html',import.meta.url));
 let queue=Promise.resolve();
