@@ -54,7 +54,7 @@ function synthesize(text){
 }
 function preloadSpeech(){
  // Serial warming avoids launching too many expensive inference jobs at once.
- const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name),'Call ended','Call failed'];
+ const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name),...config.contacts.map(x=>'Call ended. '+x.name),'Call ended','Call failed'];
  (async()=>{for(const phrase of new Set(phrases))try{await synthesize(phrase)}catch{}})();
 }
 function sendPacket(audio,offset){
