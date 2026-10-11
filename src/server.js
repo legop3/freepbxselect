@@ -9,7 +9,7 @@ const env=process.env;
 const port=Number(env.PORT||3000),rtpPort=Number(env.RTP_PORT||40000);
 const ariUrl=(env.ARI_URL||'').replace(/\/$/,'');
 const app='freepbxselect';
-const config=JSON.parse(fs.readFileSync('/app/config.json','utf8'));
+const config=JSON.parse(env.CONTACTS_JSON || fs.readFileSync('/app/config.json','utf8'));
 if(!config.contacts?.length)throw Error('config.json needs contacts');
 if(!ariUrl||!env.ARI_USER||!env.ARI_PASSWORD||!env.API_KEY||!env.RTP_HOST)throw Error('Set ARI_URL, ARI_USER, ARI_PASSWORD, API_KEY and RTP_HOST');
 for(const c of config.contacts)if(!c.name||!/^[0-9*#+-]+$/.test(c.extension))throw Error('Invalid contact');
