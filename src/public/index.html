@@ -1,15 +1,15 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FreePBX Select</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font-family:system-ui,Arial;min-height:100dvh;display:flex;flex-direction:column}
-main{flex:1;display:flex;align-items:center;justify-content:center;text-align:center;padding:1rem;font-size:clamp(2rem,8vw,6rem);font-weight:600;overflow-wrap:anywhere}
-footer{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:10px}button{font-size:2rem;padding:18px;border:0;background:#222;color:white;border-radius:10px;touch-action:manipulation}button:active{background:#444}
-</style></head><body><main id="name"></main><footer><button id="left" aria-label="Previous">←</button><button id="select" aria-label="Select or cancel">●</button><button id="right" aria-label="Next">→</button></footer>
+*{box-sizing:border-box}
+html{background:#000}
+body{margin:0;background:#000;color:#fff;font-family:system-ui,Arial;min-height:100dvh;display:grid;place-items:center}
+main{width:100%;text-align:center;padding:1rem;font-size:10rem;font-weight:600;line-height:1.05;overflow-wrap:anywhere}
+</style></head><body><main id="name"></main>
 <script>
 const name=document.getElementById('name');let current=null;
 async function refresh(){try{const r=await fetch('/api/state');if(!r.ok)throw Error();current=await r.json();name.textContent=current.name||'—'}catch{name.textContent='Offline'}}
 async function action(key){try{await fetch('/api/'+key,{method:'POST'});await refresh()}catch{}}
-for(const key of ['left','right','select'])document.getElementById(key).onclick=()=>action(key);
 document.addEventListener('keydown',e=>{if(e.repeat)return;const k=e.key==='ArrowLeft'?'left':e.key==='ArrowRight'?'right':e.key===' '||e.key==='Enter'?'select':null;if(k){e.preventDefault();action(k)}});
 let gameHeld=false;setInterval(()=>{const p=navigator.getGamepads?.()[0];if(!p){gameHeld=false;return}const k=p.buttons[0]?.pressed?'select':p.buttons[14]?.pressed||p.axes[0]<-.6?'left':p.buttons[15]?.pressed||p.axes[0]>.6?'right':null;if(k&&!gameHeld)action(k);gameHeld=!!k},100);
 const stream=new EventSource('/api/events');stream.onmessage=e=>{current=JSON.parse(e.data);name.textContent=current.name||'—'};
