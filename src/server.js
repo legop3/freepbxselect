@@ -31,7 +31,7 @@ function say(text){stopAudio();if(!remote)return;const token=audioToken;
  synth.stderr.on('data',data=>console.error('Piper:',data.toString().trim()));
  const ff=spawn('ffmpeg',['-hide_banner','-loglevel','error','-f','s16le','-ar',env.PIPER_SAMPLE_RATE||'22050','-ac','1','-i','pipe:0','-f','mulaw','-ar','8000','-ac','1','pipe:1'],{stdio:['pipe','pipe','ignore']});
  audioJob=ff;synth.stdout.pipe(ff.stdin);
- ff.on('error',e=>console.error('FFmpeg:',e));synth.on('error',e=>console.error('Piper:',e));let chunks=[],offset=0,ended=false;
+ ff.on('error',e=>{console.error('FFmpeg:',e.message);if(audioJob===ff)audioJob=null});synth.on('error',e=>{console.error('Piper:',e.message);ff.stdin.destroy()});let chunks=[],offset=0,ended=false;
  ff.stdout.on('data',x=>chunks.push(x));
  ff.on('close',()=>{ended=true;if(audioJob===ff)audioJob=null});
  let next=Date.now();
