@@ -88,7 +88,17 @@ async function say(text){
 function scheduleReconnect(){if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{reconnectTimer=null;if(ready&&phase==='idle')begin().catch(console.error)},2000)}
 function clearSession(){stopAudio();remote=null;intercom=null;contactChannel=null;mediaChannel=null;bridge=null;incoming=null;session++;setPhase('idle')}
 async function hang(){const ids=[contactChannel,incoming,intercom,mediaChannel].filter(Boolean);const b=bridge;clearSession();await Promise.allSettled([...ids.map(id=>ari('DELETE','/channels/'+q(id))),...(b?[ari('DELETE','/bridges/'+q(b))]:[])])}
-async function begin(){if(phase!=='idle'||!ready)return;const stamp=++session;setPhase('calling-intercom');try{const id=randomUUID();intercom=id;await ari('POST','/channels?'+new URLSearchParams({endpoint:env.INTERCOM_ENDPOINT||'PJSIP/777',app,appArgs:'intercom',channelId:id,timeout:'15'}),{variables:{'PJSIP_HEADER(add,Call-Info)':'<sip:freepbxselect@localhost>;answer-after=0','PJSIP_HEADER(add,Alert-Info)':'<http://www.notused.com>;info=alert-autoanswer'}});if(stamp!==session)return}catch(e){console.error('Call failed',e);if(stamp===session){await hang();scheduleReconnect()}}}
+async function begin(){
+ if(phase!=='idle'||!ready)return;
+ const stamp=++session,endpoint=env.INTERCOM_ENDPOINT||'PJSIP/777';
+ setPhase('calling-intercom');
+ try{
+  const id=randomUUID();intercom=id;
+  console.log('Originating intercom:',endpoint,'channel:',id);
+  await ari('POST','/channels?'+new URLSearchParams({endpoint,app,appArgs:'intercom',channelId:id,timeout:'15'}),{variables:{'PJSIP_HEADER(add,Call-Info)':'<sip:freepbxselect@localhost>;answer-after=0','PJSIP_HEADER(add,Alert-Info)':'<http://www.notused.com>;info=alert-autoanswer'}});
+  if(stamp!==session)return;
+ }catch(e){console.error('Intercom originate failed for',endpoint,e);if(stamp===session){await hang();scheduleReconnect()}}
+}
 async function enterMenu(){if(phase!=='calling-intercom'||!intercom)return;const stamp=session;
  try{bridge=randomUUID();await ari('POST','/bridges/'+q(bridge)+'?type=mixing');await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(intercom));
  mediaChannel=randomUUID();await ari('POST','/channels/externalMedia?'+new URLSearchParams({app,external_host:env.RTP_HOST+':'+rtpPort,format:'ulaw',channelId:mediaChannel,encapsulation:'rtp',transport:'udp',direction:'both'}));
@@ -147,6 +157,8 @@ async function handleIncoming(id){
 }
 async function onEvent(ev){
  const id=ev.channel?.id;
+ if(id===intercom&&(ev.type==='ChannelStateChange'||ev.type==='ChannelDestroyed'||ev.type==='StasisStart'||ev.type==='StasisEnd'))
+  console.log('Intercom event:',ev.type,'state:',ev.channel?.state,'cause:',ev.cause,'cause_txt:',ev.cause_txt,'channel:',id);
  if(ev.type==='StasisStart'){
   if(ev.args?.[0]==='incoming'){await handleIncoming(id);return}
   if(id===intercom){await enterMenu();return}
