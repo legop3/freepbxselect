@@ -50,7 +50,7 @@ function synthesize(text){
 }
 function preloadSpeech(){
  // Serial warming avoids launching too many expensive inference jobs at once.
- const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name),'Cancelling','Call ended','Call failed'];
+ const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name),...config.contacts.map(x=>'Cancelled. '+x.name),...config.contacts.map(x=>'Call ended. '+x.name),...config.contacts.map(x=>'Call failed. '+x.name)];
  (async()=>{for(const phrase of new Set(phrases))try{await synthesize(phrase)}catch{}})();
 }
 function sendPacket(audio,offset){
@@ -90,12 +90,12 @@ async function enterMenu(){if(phase!=='calling-intercom'||!intercom)return;const
  mediaChannel=randomUUID();await ari('POST','/channels/externalMedia?'+new URLSearchParams({app,external_host:env.RTP_HOST+':'+rtpPort,format:'ulaw',channelId:mediaChannel,encapsulation:'rtp',transport:'udp',direction:'both'}));
  if(stamp!==session)return;await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(mediaChannel));setPhase('menu');say(config.contacts[index].name)
  }catch(e){console.error('Menu setup failed',e);if(stamp===session){await hang();scheduleReconnect()}}}
-async function returnToMenu(){
+async function returnToMenu(feedback=''){
  if(!bridge||!mediaChannel||!intercom)return;
  const old=contactChannel;contactChannel=null;incoming=null;stopAudio();
  if(old)await ari('DELETE','/channels/'+q(old)).catch(()=>{});
  await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(mediaChannel)).catch(console.error);
- setPhase('menu');say(config.contacts[index].name);
+ setPhase('menu');say(feedback?feedback+'. '+config.contacts[index].name:config.contacts[index].name);
 }
 async function choose(){
  if(phase==='idle')return begin();
@@ -104,13 +104,13 @@ async function choose(){
   try{
    const id=randomUUID();contactChannel=id;
    await ari('POST','/channels?'+new URLSearchParams({endpoint:'Local/'+config.contacts[index].extension+'@'+(config.dialContext||'from-internal'),app,appArgs:'destination',channelId:id,timeout:'45'}));
-  }catch(e){console.error('Dial failed',e);if(stamp===session)await returnToMenu()}
+  }catch(e){console.error('Dial failed',e);if(stamp===session)await returnToMenu('Call failed')}
   return;
  }
  if(phase==='dialing'||phase==='connected'){
-  const id=incoming||contactChannel;incoming=null;contactChannel=null;stopAudio();say('Cancelling');
+  const id=incoming||contactChannel;incoming=null;contactChannel=null;stopAudio();
   if(id)await ari('DELETE','/channels/'+q(id)).catch(console.error);
-  await returnToMenu();return;
+  await returnToMenu('Cancelled');return;
  }
 }
 async function navigation(direction){
@@ -146,8 +146,8 @@ async function onEvent(ev){
   }
  }else if(ev.type==='StasisEnd'||ev.type==='ChannelDestroyed'){
   if(id===intercom){await hang();scheduleReconnect()}
-  else if(id===incoming){incoming=null;await returnToMenu()}
-  else if(id===contactChannel){contactChannel=null;if(phase==='connected'||phase==='dialing')await returnToMenu()}
+  else if(id===incoming){incoming=null;await returnToMenu('Call ended')}
+  else if(id===contactChannel){contactChannel=null;if(phase==='connected'||phase==='dialing')await returnToMenu('Call ended')}
   else if(id===mediaChannel&&phase!=='idle'){await hang();scheduleReconnect()}
  }
 }
