@@ -1,0 +1,17 @@
+{
+  "contacts": [
+    {
+      "name": "Living Room",
+      "extension": "111"
+    },
+    {
+      "name": "Alex",
+      "extension": "42"
+    },
+    {
+      "name": "Front Desk",
+      "extension": "822"
+    }
+  ],
+  "dialContext": "from-internal"
+}
