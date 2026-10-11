@@ -40,7 +40,7 @@ function synthesize(text){
   synth.stderr.on('data',x=>{stderr+=x.toString().slice(0,1000)});
   ff.stderr.on('data',x=>{stderr+=x.toString().slice(0,1000)});
   synth.stdout.pipe(ff.stdin);
-  synth.stdin.end(text+'\\n');
+  synth.stdin.end(text+'\n');
   ff.stdout.on('data',x=>data.push(x));
   ff.on('close',code=>{if(code!==0)return finish(new Error('Piper/FFmpeg failed: '+stderr));const output=Buffer.concat(data);if(!output.length)return finish(new Error('Piper generated empty audio'));finish(null,output)});
  });
