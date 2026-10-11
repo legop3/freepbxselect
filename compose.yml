@@ -16,6 +16,8 @@ services:
       ARI_PASSWORD: "change-me"
       # Phone that auto-answers:
       INTERCOM_ENDPOINT: "PJSIP/777"
+      # Outgoing caller identity, rather than anonymous (use a different number from 777):
+      INTERCOM_CALLER_ID: "FreePBX Select <7000>"
       # Contacts appear in this order. Change names/extensions as needed:
       CONTACTS_JSON: >-
         {"dialContext":"from-internal","contacts":[{"name":"Living Room","extension":"111"},{"name":"Alex","extension":"42"},{"name":"Front Desk","extension":"822"}]}
