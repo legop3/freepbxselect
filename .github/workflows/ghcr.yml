@@ -28,3 +28,5 @@ jobs:
           push: true
           tags: ghcr.io/legop3/freepbxselect:latest
           platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=freepbxselect
+          cache-to: type=gha,mode=max,scope=freepbxselect
