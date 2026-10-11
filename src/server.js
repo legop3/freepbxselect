@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import dgram from 'node:dgram';
 import { WebSocket } from 'ws';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
 const env=process.env;
 const port=Number(env.PORT||3000),rtpPort=Number(env.RTP_PORT||40000);
@@ -11,7 +11,7 @@ const ariUrl=(env.ARI_URL||'').replace(/\/$/,'');
 const app='freepbxselect';
 const config=JSON.parse(env.CONTACTS_JSON || fs.readFileSync('/app/config.json','utf8'));
 if(!config.contacts?.length)throw Error('config.json needs contacts');
-if(!ariUrl||!env.ARI_USER||!env.ARI_PASSWORD||!env.API_KEY||!env.RTP_HOST)throw Error('Set ARI_URL, ARI_USER, ARI_PASSWORD, API_KEY and RTP_HOST');
+if(!ariUrl||!env.ARI_USER||!env.ARI_PASSWORD||!env.RTP_HOST)throw Error('Set ARI_URL, ARI_USER, ARI_PASSWORD, and RTP_HOST');
 for(const c of config.contacts)if(!c.name||!/^[0-9*#+-]+$/.test(c.extension))throw Error('Invalid contact');
 if(!/^[a-zA-Z0-9_-]+$/.test(config.dialContext||'from-internal'))throw Error('Invalid dialContext');
 const basic=Buffer.from(env.ARI_USER+':'+env.ARI_PASSWORD).toString('base64');
@@ -49,13 +49,11 @@ async function navigation(direction){if(phase==='idle'){index=(index+direction+c
 async function onEvent(ev){if(ev.type==='StasisStart'){const id=ev.channel?.id;if(id===intercom)await enterMenu();else if(id===contactChannel&&bridge&&phase==='dialing'){await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(id));setPhase('connected')}}else if(ev.type==='StasisEnd'||ev.type==='ChannelDestroyed'){const id=ev.channel?.id;if(id===intercom){await hang()}else if(id===contactChannel){contactChannel=null;if(phase==='connected'||phase==='dialing'){setPhase('menu');say(config.contacts[index].name)}}else if(id===mediaChannel&&phase!=='idle'){await hang()}}}
 function connect(){const u=new URL(ariUrl);u.protocol=u.protocol==='https:'?'wss:':'ws:';u.pathname=u.pathname.replace(/\/$/,'')+'/events';u.search=new URLSearchParams({app,api_key:env.ARI_USER+':'+env.ARI_PASSWORD}).toString();ws=new WebSocket(u);ws.on('open',()=>{ready=true;notify()});ws.on('message',raw=>{try{onEvent(JSON.parse(raw.toString())).catch(console.error)}catch(e){console.error(e)}});ws.on('close',()=>{ready=false;notify();if(phase!=='idle')hang().catch(console.error);setTimeout(connect,3000)});ws.on('error',e=>console.error('ARI websocket',e.message))}
 rtp.on('message',(_,rinfo)=>{if(mediaChannel&&!remote)remote={address:rinfo.address,port:rinfo.port}});rtp.bind(rtpPort);
-function authorized(req){const key=req.headers['x-api-key']||new URL(req.url,'http://localhost').searchParams.get('key')||'';const a=Buffer.from(String(key)),b=Buffer.from(env.API_KEY);return a.length===b.length&&timingSafeEqual(a,b)}
 const html=fs.readFileSync(new URL('./public/index.html',import.meta.url));
 let queue=Promise.resolve();
 const server=http.createServer((req,res)=>{const url=new URL(req.url,'http://localhost');const send=(code,obj)=>{res.writeHead(code,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(obj))};
  if(req.method==='GET'&&url.pathname==='/'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(html);return}
  if(url.pathname==='/health'){send(200,{ok:true,ari:ready});return}
- if(url.pathname.startsWith('/api/')&&!authorized(req)){send(401,{error:'Unauthorized'});return}
  if(req.method==='GET'&&url.pathname==='/api/state'){send(200,state());return}
  if(req.method==='GET'&&url.pathname==='/api/events'){res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});res.write('data: '+JSON.stringify(state())+'\n\n');clients.add(res);req.on('close',()=>clients.delete(res));return}
  if(req.method==='POST'&&['/api/left','/api/right','/api/select'].includes(url.pathname)){queue=queue.catch(console.error).then(()=>url.pathname==='/api/left'?navigation(-1):url.pathname==='/api/right'?navigation(1):choose());queue.then(()=>send(200,state()),e=>{console.error(e);send(500,{error:'Operation failed'})});return}

@@ -7,12 +7,11 @@ footer{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:10px}but
 </style></head><body><main id="name"></main><footer><button id="left" aria-label="Previous">←</button><button id="select" aria-label="Select or cancel">●</button><button id="right" aria-label="Next">→</button></footer>
 <script>
 const name=document.getElementById('name');let current=null;
-async function refresh(){try{const r=await fetch('/api/state',{headers:{'X-API-Key':sessionStorage.getItem('apiKey')||''}});if(!r.ok)throw Error();current=await r.json();name.textContent=current.name||'—'}catch{name.textContent='Offline'}}
-async function action(key){try{await fetch('/api/'+key,{method:'POST',headers:{'X-API-Key':sessionStorage.getItem('apiKey')||''}});await refresh()}catch{}}
+async function refresh(){try{const r=await fetch('/api/state');if(!r.ok)throw Error();current=await r.json();name.textContent=current.name||'—'}catch{name.textContent='Offline'}}
+async function action(key){try{await fetch('/api/'+key,{method:'POST'});await refresh()}catch{}}
 for(const key of ['left','right','select'])document.getElementById(key).onclick=()=>action(key);
 document.addEventListener('keydown',e=>{if(e.repeat)return;const k=e.key==='ArrowLeft'?'left':e.key==='ArrowRight'?'right':e.key===' '||e.key==='Enter'?'select':null;if(k){e.preventDefault();action(k)}});
 let gameHeld=false;setInterval(()=>{const p=navigator.getGamepads?.()[0];if(!p){gameHeld=false;return}const k=p.buttons[0]?.pressed?'select':p.buttons[14]?.pressed||p.axes[0]<-.6?'left':p.buttons[15]?.pressed||p.axes[0]>.6?'right':null;if(k&&!gameHeld)action(k);gameHeld=!!k},100);
-if(!sessionStorage.getItem('apiKey')){const key=prompt('Controller API key');if(key)sessionStorage.setItem('apiKey',key)}
-const stream=new EventSource('/api/events?key='+encodeURIComponent(sessionStorage.getItem('apiKey')||''));stream.onmessage=e=>{current=JSON.parse(e.data);name.textContent=current.name||'—'};
+const stream=new EventSource('/api/events');stream.onmessage=e=>{current=JSON.parse(e.data);name.textContent=current.name||'—'};
 refresh();
 </script></body></html>

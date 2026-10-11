@@ -14,8 +14,6 @@ services:
       ARI_URL: "http://192.168.0.25:8088/ari"
       ARI_USER: "freepbxselect"
       ARI_PASSWORD: "change-me"
-      # Currently required by the application for HTTP controls:
-      API_KEY: "change-me"
       # Phone that auto-answers:
       INTERCOM_ENDPOINT: "PJSIP/777"
       # Contacts appear in this order. Change names/extensions as needed:
