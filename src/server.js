@@ -172,7 +172,11 @@ async function choose(){
    await say('Calling '+selected.name+', press again to cancel.');
    if(!active())return;
    for(const number of ['3','2','1']){
+    const started=Date.now();
     await say(number);
+    if(!active())return;
+    // Keep a real countdown cadence, measured from the start of each number.
+    await new Promise(resolve=>setTimeout(resolve,Math.max(0,1000-(Date.now()-started))));
     if(!active())return;
    }
    if(!active())return;
