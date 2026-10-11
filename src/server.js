@@ -171,16 +171,20 @@ async function choose(){
   void announcement.then(()=>{
    if(stamp===session&&phase==='dialing')startRingback(stamp);
   });
-  try{
-   const id=randomUUID();contactChannel=id;
-   await ari('POST','/channels?'+new URLSearchParams({endpoint:'Local/'+selected.extension+'@'+(config.dialContext||'from-internal'),app,appArgs:'destination',channelId:id,timeout:'45',callerId:env.CONTACT_CALLER_ID||'FreePBX Select <7000>'}));
-   // If cancelled while originate was in flight, make sure no call survives.
-   if(stamp!==session||contactChannel!==id)
-    await ari('DELETE','/channels/'+q(id)).catch(()=>{});
-  }catch(e){
-   console.error('Dial failed',e);
-   if(stamp===session&&phase==='dialing')await returnToMenu('Call failed');
-  }
+  // Don't block the button-command queue on an ARI network request:
+  // the next Select press must be able to cancel immediately.
+  void (async()=>{
+   try{
+    const id=randomUUID();contactChannel=id;
+    await ari('POST','/channels?'+new URLSearchParams({endpoint:'Local/'+selected.extension+'@'+(config.dialContext||'from-internal'),app,appArgs:'destination',channelId:id,timeout:'45',callerId:env.CONTACT_CALLER_ID||'FreePBX Select <7000>'}));
+    // If cancelled while originate was in flight, make sure no call survives.
+    if(stamp!==session||contactChannel!==id)
+     await ari('DELETE','/channels/'+q(id)).catch(()=>{});
+   }catch(e){
+    console.error('Dial failed',e);
+    if(stamp===session&&phase==='dialing')await returnToMenu('Call failed');
+   }
+  })();
   return;
  }
  if(phase==='dialing'||phase==='connected'){
@@ -198,7 +202,7 @@ async function navigation(direction){
  if(phase==='menu')say(config.contacts[index].name);
 }
 async function handleIncoming(id){
- if(!bridge||!intercom||!mediaChannel||incoming||phase==='connected'||phase==='dialing'||phase==='preparing-call'){
+ if(!bridge||!intercom||!mediaChannel||incoming||phase==='connected'||phase==='dialing'){
   // Return to the dialplan fallback instead of leaving the caller stuck.
   await ari('POST','/channels/'+q(id)+'/continue?context=freepbxselect-fallback&extension=s&priority=1').catch(console.error);
   return;
