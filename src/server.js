@@ -25,6 +25,8 @@ async function ari(method,path,body){const res=await fetch(ariUrl+path,{method,h
 const q=x=>encodeURIComponent(x);
 // Synthesize phrases once. Cached G.711 audio makes contact navigation immediate
 // and prevents slow Piper model startup from delaying every button press.
+const ttsLengthScale=Number(env.TTS_LENGTH_SCALE||'1.2');
+if(!Number.isFinite(ttsLengthScale)||ttsLengthScale<=0)throw Error('Invalid TTS_LENGTH_SCALE');
 const speechCache=new Map();
 let speechQueue=Promise.resolve();
 // One continuous RTP clock, independent of speech and call state.
@@ -35,7 +37,7 @@ function stopAudio(){
 }
 function synthesizeNow(text){
  return new Promise((resolve,reject)=>{
-  const synth=spawn('/opt/piper/bin/piper',['--model',env.PIPER_MODEL||'/opt/voices/en_US-lessac-medium.onnx','--output-raw'],{stdio:['pipe','pipe','pipe']});
+  const synth=spawn('/opt/piper/bin/piper',['--model',env.PIPER_MODEL||'/opt/voices/en_US-lessac-medium.onnx','--length-scale',String(ttsLengthScale),'--output-raw'],{stdio:['pipe','pipe','pipe']});
   const ff=spawn('ffmpeg',['-hide_banner','-loglevel','error','-f','s16le','-ar',env.PIPER_SAMPLE_RATE||'22050','-ac','1','-i','pipe:0','-f','mulaw','-ar','8000','-ac','1','pipe:1'],{stdio:['pipe','pipe','pipe']});
   const data=[];let completed=false;let stderr='';
   const timer=setTimeout(()=>finish(new Error('Speech synthesis timed out')),30000);
@@ -62,7 +64,7 @@ function synthesize(text){
 async function preloadSpeech(){
  // Warm the speech cache in the background; never delay the intercom call.
  // Serial synthesis avoids launching many Piper processes at once.
- const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name+', press again to cancel.'),'3','2','1',...config.contacts.map(x=>'Call ended. '+x.name),'Call ended','Call failed','Incoming call'];
+ const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name+', press again to cancel.'),'3','2','1','Call ended','Call failed','Incoming call'];
  // Enqueue ALL speech immediately, without waiting for an individual phrase.
  // Menu requests share these exact promises; none start a second Piper process.
  const jobs=[...new Set(phrases)].map(phrase=>synthesize(phrase));
@@ -201,13 +203,13 @@ async function choose(){
  if(phase==='preparing-call'){
   stopAudio();
   setPhase('menu');
-  void say('Call ended. '+config.contacts[index].name);
+  void say('Call ended');
   return;
  }
  if(phase==='dialing'||phase==='connected'){
   const id=incoming||contactChannel;incoming=null;contactChannel=null;stopAudio();
   if(id)await ari('DELETE','/channels/'+q(id)).catch(console.error);
-  await returnToMenu('Call ended. '+config.contacts[index].name);return;
+  await returnToMenu('Call ended');return;
  }
 }
 async function navigation(direction){
