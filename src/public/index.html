@@ -9,12 +9,13 @@ main span{display:block;min-width:0;width:100%;overflow-wrap:anywhere}
 footer{width:100%;height:100%;min-width:0;min-height:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;padding:0}
 button{min-width:0;min-height:0;width:100%;height:100%;padding:0;border:0;border-radius:0;background:#282828;color:#fff;display:grid;place-items:center;cursor:pointer;touch-action:manipulation;overflow:hidden}
 button+button{border-left:2px solid #555}
-button:active{background:#444}
+button:active,button.lit{background:#fff;color:#000}
 button svg{width:100%;height:100%;display:block;fill:currentColor}
 #select{font-family:system-ui,Arial;font-weight:1000;font-size:min(16dvh,16vw);line-height:1;letter-spacing:-.04em;white-space:nowrap}
 </style></head><body><main><span id="name"></span></main><footer><button id="left" aria-label="Previous contact"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M76 7 L19 50 L76 93 L76 65 L55 50 L76 35 Z"/></svg></button><button id="select" aria-label="Call or hang up">CALL</button><button id="right" aria-label="Next contact"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M24 7 L81 50 L24 93 L24 65 L45 50 L24 35 Z"/></svg></button></footer>
 <script>
-const name=document.getElementById('name');let current=null;
+const name=document.getElementById('name');let current=null,lastPress=0,lightTimer=null;
+function showState(state){showName(state.name||'—');if(state.buttonPress&&state.buttonPress!==lastPress){lastPress=state.buttonPress;const button=document.getElementById(state.lastButton);document.querySelectorAll('footer button').forEach(b=>b.classList.remove('lit'));clearTimeout(lightTimer);if(button){button.classList.add('lit');lightTimer=setTimeout(()=>button.classList.remove('lit'),220)}}}
 // Fit using the browser's actual multiline layout, not a single-line estimate.
 // Fixed 17-pass binary search: no recursion, resize observers, or feedback loop.
 function fitName(){
@@ -30,11 +31,11 @@ function fitName(){
 }
 function showName(text){name.textContent=text;fitName()}
 window.addEventListener('resize',fitName);
-async function refresh(){try{const r=await fetch('/api/state');if(!r.ok)throw Error();current=await r.json();showName(current.name||'—')}catch{showName('Offline')}}
+async function refresh(){try{const r=await fetch('/api/state');if(!r.ok)throw Error();current=await r.json();showState(current)}catch{showName('Offline')}}
 for(const key of ['left','select','right'])document.getElementById(key).addEventListener('click',()=>action(key));
 async function action(key){try{await fetch('/api/'+key,{method:'POST'});await refresh()}catch{}}
 document.addEventListener('keydown',e=>{if(e.repeat)return;const k=e.key==='ArrowLeft'?'left':e.key==='ArrowRight'?'right':e.key===' '||e.key==='Enter'?'select':null;if(k){e.preventDefault();action(k)}});
 let gameHeld=false;setInterval(()=>{const p=navigator.getGamepads?.()[0];if(!p){gameHeld=false;return}const k=p.buttons[0]?.pressed?'select':p.buttons[14]?.pressed||p.axes[0]<-.6?'left':p.buttons[15]?.pressed||p.axes[0]>.6?'right':null;if(k&&!gameHeld)action(k);gameHeld=!!k},100);
-const stream=new EventSource('/api/events');stream.onmessage=e=>{current=JSON.parse(e.data);showName(current.name||'—')};
+const stream=new EventSource('/api/events');stream.onmessage=e=>{current=JSON.parse(e.data);showState(current)};
 refresh();
 </script></body></html>
