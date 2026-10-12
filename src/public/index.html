@@ -4,19 +4,22 @@
 *{box-sizing:border-box}
 html{background:#000}
 body{margin:0;background:#000;color:#fff;font-family:system-ui,Arial;height:100dvh;display:grid;place-items:center;overflow:hidden}
-main{width:100%;text-align:center;font-weight:600;line-height:1;white-space:nowrap}
+main{width:98vw;text-align:center;font-weight:600;line-height:1;white-space:normal;overflow-wrap:anywhere}
 </style></head><body><main id="name"></main>
 <script>
 const name=document.getElementById('name');let current=null;
-// Measure once at a fixed size, then calculate the largest single-line font
-// that fits both viewport dimensions. No iterative resizing or fixed max size.
-const measure=document.createElement('canvas').getContext('2d');
-measure.font='600 100px system-ui, Arial';
+// Fit using the browser's actual multiline layout, not a single-line estimate.
+// Fixed 17-pass binary search: no recursion, resize observers, or feedback loop.
 function fitName(){
- const width=document.documentElement.clientWidth*0.94;
- const height=window.innerHeight*0.88;
- const textWidth=measure.measureText(name.textContent||'—').width;
- name.style.fontSize=Math.max(1,Math.min(height,100*width/Math.max(1,textWidth)))+'px';
+ const available=window.innerHeight*0.98;
+ let low=1,high=available;
+ for(let i=0;i<17;i++){
+  const size=(low+high)/2;
+  name.style.fontSize=size+'px';
+  if(name.scrollHeight<=available&&name.scrollWidth<=name.clientWidth+1)low=size;
+  else high=size;
+ }
+ name.style.fontSize=low+'px';
 }
 function showName(text){name.textContent=text;fitName()}
 window.addEventListener('resize',fitName);
@@ -24,6 +27,6 @@ async function refresh(){try{const r=await fetch('/api/state');if(!r.ok)throw Er
 async function action(key){try{await fetch('/api/'+key,{method:'POST'});await refresh()}catch{}}
 document.addEventListener('keydown',e=>{if(e.repeat)return;const k=e.key==='ArrowLeft'?'left':e.key==='ArrowRight'?'right':e.key===' '||e.key==='Enter'?'select':null;if(k){e.preventDefault();action(k)}});
 let gameHeld=false;setInterval(()=>{const p=navigator.getGamepads?.()[0];if(!p){gameHeld=false;return}const k=p.buttons[0]?.pressed?'select':p.buttons[14]?.pressed||p.axes[0]<-.6?'left':p.buttons[15]?.pressed||p.axes[0]>.6?'right':null;if(k&&!gameHeld)action(k);gameHeld=!!k},100);
-const stream=new EventSource('/api/events');stream.onmessage=e=>{current=JSON.parse(e.data);name.textContent=current.name||'—'};
+const stream=new EventSource('/api/events');stream.onmessage=e=>{current=JSON.parse(e.data);showName(current.name||'—')};
 refresh();
 </script></body></html>
