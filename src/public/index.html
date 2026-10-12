@@ -11,7 +11,7 @@ button{min-width:0;min-height:0;width:100%;height:100%;padding:0;border:0;border
 button+button{border-left:2px solid #555}
 button:active,button.lit{background:#fff;color:#000}
 button svg{width:100%;height:100%;display:block;fill:currentColor}
-#select{font-family:system-ui,Arial;font-weight:400;font-size:min(16dvh,16vw);line-height:1;letter-spacing:-.04em;white-space:nowrap}
+#select{font-family:system-ui,Arial;font-weight:400;font-size:1px;line-height:1;letter-spacing:-.04em;white-space:nowrap}
 </style></head><body><main><span id="name"></span></main><footer><button id="left" aria-label="Previous contact"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M63 8 L24 50 L63 92 L75 81 L47 50 L75 19 Z"/></svg></button><button id="select" aria-label="Call or hang up">CALL</button><button id="right" aria-label="Next contact"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M37 8 L76 50 L37 92 L25 81 L53 50 L25 19 Z"/></svg></button></footer>
 <script>
 const name=document.getElementById('name');let current=null,lastPress=0,lightTimer=null;
@@ -29,8 +29,18 @@ function fitName(){
  }
  name.style.fontSize=low+'px';
 }
+function fitCall(){
+ const button=document.getElementById('select');
+ const width=button.clientWidth,height=button.clientHeight;
+ const canvas=document.createElement('canvas').getContext('2d');
+ canvas.font='400 100px system-ui,Arial';
+ const textWidth=canvas.measureText('CALL').width;
+ // Size against both actual button dimensions, leaving only a tiny safety gap.
+ button.style.fontSize=Math.max(1,Math.min(height*.95,100*width*.98/textWidth))+'px';
+}
 function showName(text){name.textContent=text;fitName()}
-window.addEventListener('resize',fitName);
+window.addEventListener('resize',()=>{fitName();fitCall()});
+fitCall();
 async function refresh(){try{const r=await fetch('/api/state');if(!r.ok)throw Error();current=await r.json();showState(current)}catch{showName('Offline')}}
 for(const key of ['left','select','right'])document.getElementById(key).addEventListener('click',()=>action(key));
 async function action(key){try{await fetch('/api/'+key,{method:'POST'});await refresh()}catch{}}
