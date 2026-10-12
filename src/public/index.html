@@ -4,14 +4,14 @@
 *{box-sizing:border-box}
 html{background:#000}
 body{margin:0;background:#000;color:#fff;font-family:system-ui,Arial;height:100dvh;display:grid;place-items:center;overflow:hidden}
-main{width:98vw;text-align:center;font-weight:600;line-height:1;white-space:normal;overflow-wrap:anywhere}
+main{width:100vw;text-align:center;font-weight:600;line-height:1;white-space:normal;overflow-wrap:anywhere}
 </style></head><body><main id="name"></main>
 <script>
 const name=document.getElementById('name');let current=null;
 // Fit using the browser's actual multiline layout, not a single-line estimate.
 // Fixed 17-pass binary search: no recursion, resize observers, or feedback loop.
 function fitName(){
- const available=window.innerHeight*0.98;
+ const available=window.innerHeight;
  let low=1,high=available;
  for(let i=0;i<17;i++){
   const size=(low+high)/2;
