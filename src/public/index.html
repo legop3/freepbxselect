@@ -4,15 +4,15 @@
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000;color:#fff}
 body{font-family:system-ui,Arial;display:grid;grid-template-rows:minmax(0,1fr) 25%;width:100vw;height:100dvh}
-main{min-width:0;min-height:0;width:100%;height:100%;display:grid;place-items:center;overflow:hidden;text-align:center;font-weight:900;line-height:1}
+main{min-width:0;min-height:0;width:100%;height:100%;display:grid;place-items:center;overflow:hidden;text-align:center;font-weight:400;line-height:1}
 main span{display:block;min-width:0;width:100%;overflow-wrap:anywhere}
 footer{width:100%;height:100%;min-width:0;min-height:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;padding:0}
 button{min-width:0;min-height:0;width:100%;height:100%;padding:0;border:0;border-radius:0;background:#282828;color:#fff;display:grid;place-items:center;cursor:pointer;touch-action:manipulation;overflow:hidden}
 button+button{border-left:2px solid #555}
 button:active,button.lit{background:#fff;color:#000}
 button svg{width:100%;height:100%;display:block;fill:currentColor}
-#select{font-family:system-ui,Arial;font-weight:1000;font-size:min(16dvh,16vw);line-height:1;letter-spacing:-.04em;white-space:nowrap}
-</style></head><body><main><span id="name"></span></main><footer><button id="left" aria-label="Previous contact"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M76 7 L19 50 L76 93 L76 65 L55 50 L76 35 Z"/></svg></button><button id="select" aria-label="Call or hang up">CALL</button><button id="right" aria-label="Next contact"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M24 7 L81 50 L24 93 L24 65 L45 50 L24 35 Z"/></svg></button></footer>
+#select{font-family:system-ui,Arial;font-weight:400;font-size:min(16dvh,16vw);line-height:1;letter-spacing:-.04em;white-space:nowrap}
+</style></head><body><main><span id="name"></span></main><footer><button id="left" aria-label="Previous contact"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M63 8 L24 50 L63 92 L75 81 L47 50 L75 19 Z"/></svg></button><button id="select" aria-label="Call or hang up">CALL</button><button id="right" aria-label="Next contact"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M37 8 L76 50 L37 92 L25 81 L53 50 L25 19 Z"/></svg></button></footer>
 <script>
 const name=document.getElementById('name');let current=null,lastPress=0,lightTimer=null;
 function showState(state){showName(state.name||'—');if(state.buttonPress&&state.buttonPress!==lastPress){lastPress=state.buttonPress;const button=document.getElementById(state.lastButton);document.querySelectorAll('footer button').forEach(b=>b.classList.remove('lit'));clearTimeout(lightTimer);if(button){button.classList.add('lit');lightTimer=setTimeout(()=>button.classList.remove('lit'),220)}}}
