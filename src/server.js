@@ -17,8 +17,9 @@ if(!/^[a-zA-Z0-9_-]+$/.test(config.dialContext||'from-internal'))throw Error('In
 const basic=Buffer.from(env.ARI_USER+':'+env.ARI_PASSWORD).toString('base64');
 let index=0,phase='idle',intercom=null,contactChannel=null,mediaChannel=null,bridge=null,session=0,remote=null;
 let audioJob=null,audioToken=0,ws=null,ready=false,incoming=null,reconnectTimer=null;
+let lastButton=null,buttonPress=0;
 const clients=new Set();const rtp=dgram.createSocket('udp4');let seq=0,timestamp=0,ssrc=Math.floor(Math.random()*0xffffffff);
-function state(){return {name:config.contacts[index].name,index,phase,connected:ready,contacts:config.contacts.length}}
+function state(){return {name:config.contacts[index].name,index,phase,connected:ready,contacts:config.contacts.length,lastButton,buttonPress}}
 function notify(){const data='data: '+JSON.stringify(state())+'\n\n';for(const res of clients)res.write(data)}
 function setPhase(p){phase=p;notify()}
 async function ari(method,path,body){const res=await fetch(ariUrl+path,{method,headers:{Authorization:'Basic '+basic,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});if(!res.ok)throw Error('ARI '+method+' '+path+' '+res.status+' '+(await res.text()).slice(0,200));const raw=await res.text();return raw?JSON.parse(raw):null}
@@ -283,7 +284,7 @@ const server=http.createServer((req,res)=>{const url=new URL(req.url,'http://loc
  if(url.pathname==='/health'){send(200,{ok:true,ari:ready});return}
  if(req.method==='GET'&&url.pathname==='/api/state'){send(200,state());return}
  if(req.method==='GET'&&url.pathname==='/api/events'){res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});res.write('data: '+JSON.stringify(state())+'\n\n');clients.add(res);req.on('close',()=>clients.delete(res));return}
- if(req.method==='POST'&&['/api/left','/api/right','/api/select'].includes(url.pathname)){queue=queue.catch(console.error).then(()=>url.pathname==='/api/left'?navigation(-1):url.pathname==='/api/right'?navigation(1):choose());queue.then(()=>send(200,state()),e=>{console.error(e);send(500,{error:'Operation failed'})});return}
+ if(req.method==='POST'&&['/api/left','/api/right','/api/select'].includes(url.pathname)){lastButton=url.pathname.slice(5);buttonPress++;notify();queue=queue.catch(console.error).then(()=>url.pathname==='/api/left'?navigation(-1):url.pathname==='/api/right'?navigation(1):choose());queue.then(()=>send(200,state()),e=>{console.error(e);send(500,{error:'Operation failed'})});return}
  send(404,{error:'Not found'});
 });
 server.listen(port,()=>console.log('FreePBX Select listening on',port));connect();
