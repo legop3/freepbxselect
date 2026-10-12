@@ -25,7 +25,7 @@ async function ari(method,path,body){const res=await fetch(ariUrl+path,{method,h
 const q=x=>encodeURIComponent(x);
 // Synthesize phrases once. Cached G.711 audio makes contact navigation immediate
 // and prevents slow Piper model startup from delaying every button press.
-const ttsLengthScale=Number(env.TTS_LENGTH_SCALE||'1.2');
+const ttsLengthScale=Number(env.TTS_LENGTH_SCALE||'1.4');
 if(!Number.isFinite(ttsLengthScale)||ttsLengthScale<=0)throw Error('Invalid TTS_LENGTH_SCALE');
 const speechCache=new Map();
 let speechQueue=Promise.resolve();
@@ -155,6 +155,16 @@ async function begin(){
   if(stamp!==session)return;
  }catch(e){console.error('Intercom originate failed for',endpoint,e);if(stamp===session){await hang();scheduleReconnect()}}
 }
+// Raise speech received FROM the remote party before Asterisk mixes it.
+// This leaves Piper's separate RTP audio channel at its original volume.
+const callRxGain=Number(env.CALL_RX_GAIN??'3');
+if(!Number.isInteger(callRxGain)||callRxGain<0||callRxGain>20)throw Error('Invalid CALL_RX_GAIN');
+async function boostCaller(id){
+ if(!callRxGain)return;
+ try{
+  await ari('POST','/channels/'+q(id)+'/variable?'+new URLSearchParams({variable:'VOLUME(RX)',value:String(callRxGain)}));
+ }catch(e){console.error('Could not apply call RX gain:',e.message)}
+}
 async function enterMenu(){if(phase!=='calling-intercom'||!intercom)return;const stamp=session;
  try{bridge=randomUUID();await ari('POST','/bridges/'+q(bridge)+'?type=mixing');await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(intercom));
  mediaChannel=randomUUID();await ari('POST','/channels/externalMedia?'+new URLSearchParams({app,external_host:env.RTP_HOST+':'+rtpPort,format:'ulaw',channelId:mediaChannel,encapsulation:'rtp',transport:'udp',direction:'both'}));
@@ -203,13 +213,14 @@ async function choose(){
  if(phase==='preparing-call'){
   stopAudio();
   setPhase('menu');
-  void say('Call ended');
+  void say('Cancelled');
   return;
  }
  if(phase==='dialing'||phase==='connected'){
+  const wasDialing=phase==='dialing';
   const id=incoming||contactChannel;incoming=null;contactChannel=null;stopAudio();
   if(id)await ari('DELETE','/channels/'+q(id)).catch(console.error);
-  await returnToMenu('Call ended');return;
+  await returnToMenu(wasDialing?'Cancelled':'Call ended');return;
  }
 }
 async function navigation(direction){
@@ -235,6 +246,7 @@ async function handleIncoming(id){
   if(stamp!==session||incoming!==id||phase!=='incoming')return;
   await ari('POST','/channels/'+q(id)+'/answer');
   if(stamp!==session||incoming!==id||phase!=='incoming')return;
+  await boostCaller(id);
   await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(id));
   setPhase('connected');
  }catch(e){
@@ -251,13 +263,14 @@ async function onEvent(ev){
   if(ev.args?.[0]==='incoming'){await handleIncoming(id);return}
   if(id===intercom){await enterMenu();return}
   if(id===contactChannel&&bridge&&phase==='dialing'){
+   await boostCaller(id);
    await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(id));
    stopAudio();setPhase('connected');
   }
  }else if(ev.type==='StasisEnd'||ev.type==='ChannelDestroyed'){
   if(id===intercom){await hang();scheduleReconnect()}
   else if(id===incoming){incoming=null;await returnToMenu('Call ended')}
-  else if(id===contactChannel){contactChannel=null;if(phase==='connected'||phase==='dialing')await returnToMenu('Call ended')}
+  else if(id===contactChannel){contactChannel=null;if(phase==='connected'||phase==='dialing')await returnToMenu(phase==='dialing'?'Cancelled':'Call ended')}
   else if(id===mediaChannel&&phase!=='idle'){await hang();scheduleReconnect()}
  }
 }
