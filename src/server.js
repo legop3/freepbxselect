@@ -64,7 +64,7 @@ function synthesize(text){
 async function preloadSpeech(){
  // Warm the speech cache in the background; never delay the intercom call.
  // Serial synthesis avoids launching many Piper processes at once.
- const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name+', press again to cancel.'),'3','2','1','Call ended','Call failed','Incoming call'];
+ const phrases=[...config.contacts.map(x=>x.name),...config.contacts.map(x=>'Calling '+x.name+', press again to cancel.'),'3','2','1','Call ended','Cancelled','Call failed','Incoming call'];
  // Enqueue ALL speech immediately, without waiting for an individual phrase.
  // Menu requests share these exact promises; none start a second Piper process.
  const jobs=[...new Set(phrases)].map(phrase=>synthesize(phrase));
