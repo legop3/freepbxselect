@@ -7,7 +7,7 @@ body{margin:0;background:#000;color:#fff;font-family:system-ui,Arial;height:100d
 main{flex:1;min-height:0;width:100%;display:flex;align-items:center;justify-content:center;text-align:center;font-weight:600;line-height:1;overflow-wrap:anywhere}
 main span{display:block;width:100%}
 footer{flex:none;height:clamp(64px,15dvh,112px);display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:8px;background:#111}
-button{border:0;border-radius:10px;background:#282828;color:#fff;font:inherit;font-size:clamp(1.8rem,5dvh,3rem);cursor:pointer;touch-action:manipulation}
+button{border:0;border-radius:10px;background:#282828;color:#fff;font:inherit;font-size:min(11dvh,25vw);line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;touch-action:manipulation}
 button:active{background:#444}
 </style></head><body><main><span id="name"></span></main><footer><button id="left" aria-label="Previous contact">←</button><button id="select" aria-label="Call or hang up">☎</button><button id="right" aria-label="Next contact">→</button></footer>
 <script>
