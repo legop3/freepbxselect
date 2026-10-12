@@ -37,7 +37,7 @@ function stopAudio(){
 }
 function synthesizeNow(text){
  return new Promise((resolve,reject)=>{
-  const synth=spawn('/opt/piper/bin/piper',['--model',env.PIPER_MODEL||'/opt/voices/en_US-lessac-medium.onnx','--length-scale',String(ttsLengthScale),'--output-raw'],{stdio:['pipe','pipe','pipe']});
+  const synth=spawn('/opt/piper/bin/piper',['--model',env.PIPER_MODEL||'/opt/voices/en_US-amy-medium.onnx','--length-scale',String(ttsLengthScale),'--output-raw'],{stdio:['pipe','pipe','pipe']});
   const ff=spawn('ffmpeg',['-hide_banner','-loglevel','error','-f','s16le','-ar',env.PIPER_SAMPLE_RATE||'22050','-ac','1','-i','pipe:0','-f','mulaw','-ar','8000','-ac','1','pipe:1'],{stdio:['pipe','pipe','pipe']});
   const data=[];let completed=false;let stderr='';
   const timer=setTimeout(()=>finish(new Error('Speech synthesis timed out')),30000);
