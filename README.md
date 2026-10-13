@@ -1,6 +1,6 @@
 # FreePBX Select
 
-A Docker-hosted three-button contact selector for FreePBX/Asterisk. The single shared menu can be controlled through its minimal web interface or by HTTP requests from a microcontroller. The selected contact's **name** is the only main-screen content. Left = previous, center = start/select/cancel/hang up, right = next.
+A Docker-hosted three-button contact selector for FreePBX/Asterisk. The single shared menu can be controlled through its minimal web interface or by HTTP requests from a microcontroller. The selected contact's **name** is the only main-screen content. Button 1 = previous, button 2 = start/select/cancel/hang up, button 3 = next. While connected, all three buttons hang up. The server supplies button labels in `/api/state` as `buttons`.
 
 ## Setup
 
@@ -25,9 +25,9 @@ Whether auto-answer works depends on the SIP phone model, firmware, and its prov
 ## HTTP API (no authentication)
 
 ```sh
-curl -X POST http://DOCKER-HOST:3000/api/left
-curl -X POST http://DOCKER-HOST:3000/api/right
-curl -X POST http://DOCKER-HOST:3000/api/select
+curl -X POST http://DOCKER-HOST:3000/api/1
+curl -X POST http://DOCKER-HOST:3000/api/3
+curl -X POST http://DOCKER-HOST:3000/api/2
 curl http://DOCKER-HOST:3000/api/state
 ```
 
