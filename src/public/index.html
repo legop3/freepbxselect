@@ -11,11 +11,11 @@ button{min-width:0;min-height:0;width:100%;height:100%;padding:0;border:0;border
 button+button{border-left:2px solid #555}
 button:active,button.lit{background:#fff;color:#000}
 button svg{width:100%;height:100%;display:block;fill:currentColor}
-#select{font-family:system-ui,Arial;font-weight:400;font-size:1px;line-height:1;letter-spacing:-.04em;white-space:nowrap}
+#select,button.end{font-family:system-ui,Arial;font-weight:400;font-size:1px;line-height:1;letter-spacing:-.04em;white-space:nowrap}
 </style></head><body><main><span id="name"></span></main><footer><button id="left" aria-label="Previous contact"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M63 8 L24 50 L63 92 L75 81 L47 50 L75 19 Z"/></svg></button><button id="select" aria-label="Call or hang up">CALL</button><button id="right" aria-label="Next contact"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M37 8 L76 50 L37 92 L25 81 L53 50 L25 19 Z"/></svg></button></footer>
 <script>
 const name=document.getElementById('name');let current=null,lastPress=0,lightTimer=null;
-function showState(state){showName(state.name||'—');if(state.buttonPress&&state.buttonPress!==lastPress){lastPress=state.buttonPress;const button=document.getElementById(state.lastButton);document.querySelectorAll('footer button').forEach(b=>b.classList.remove('lit'));clearTimeout(lightTimer);if(button){button.classList.add('lit');lightTimer=setTimeout(()=>button.classList.remove('lit'),220)}}}
+function showState(state){showName(state.name||'—');renderButtons(state);if(state.buttonPress&&state.buttonPress!==lastPress){lastPress=state.buttonPress;const button=document.getElementById(state.lastButton);document.querySelectorAll('footer button').forEach(b=>b.classList.remove('lit'));clearTimeout(lightTimer);if(button){button.classList.add('lit');lightTimer=setTimeout(()=>button.classList.remove('lit'),220)}}}
 // Fit using the browser's actual multiline layout, not a single-line estimate.
 // Fixed 17-pass binary search: no recursion, resize observers, or feedback loop.
 function fitName(){
@@ -29,23 +29,39 @@ function fitName(){
  }
  name.style.fontSize=low+'px';
 }
-function fitCall(){
- const button=document.getElementById('select');
- const width=button.clientWidth,height=button.clientHeight;
- const canvas=document.createElement('canvas').getContext('2d');
- canvas.font='400 100px system-ui,Arial';
- const textWidth=canvas.measureText('CALL').width;
- // Size against both actual button dimensions, leaving only a tiny safety gap.
- button.style.fontSize=Math.max(1,Math.min(height*.95,100*width*.98/textWidth))+'px';
+const arrows={left:document.getElementById('left').innerHTML,right:document.getElementById('right').innerHTML};
+const measure=document.createElement('canvas').getContext('2d');
+function renderButtons(state){
+ const ending=state.phase==='connected';
+ for(const key of ['left','select','right']){
+  const button=document.getElementById(key);
+  const label=ending?'END':key==='select'?'CALL':arrows[key];
+  if(button.dataset.label!==label){
+   button.innerHTML=label;
+   button.dataset.label=label;
+   button.classList.toggle('end',ending);
+   button.setAttribute('aria-label',ending?'End call':key==='select'?'Call or cancel':key==='left'?'Previous contact':'Next contact');
+  }
+ }
+ fitButtons();
+}
+function fitButtons(){
+ measure.font='400 100px system-ui,Arial';
+ for(const key of ['left','select','right']){
+  const button=document.getElementById(key);
+  if(key!=='select'&&!button.classList.contains('end'))continue;
+  const label=button.textContent;
+  button.style.fontSize=Math.max(1,Math.min(button.clientHeight*.95,100*button.clientWidth*.98/measure.measureText(label).width))+'px';
+ }
 }
 function showName(text){name.textContent=text;fitName()}
-window.addEventListener('resize',()=>{fitName();fitCall()});
-fitCall();
+window.addEventListener('resize',()=>{fitName();fitButtons()});
 async function refresh(){try{const r=await fetch('/api/state');if(!r.ok)throw Error();current=await r.json();showState(current)}catch{showName('Offline')}}
 for(const key of ['left','select','right'])document.getElementById(key).addEventListener('click',()=>action(key));
-async function action(key){try{await fetch('/api/'+key,{method:'POST'});await refresh()}catch{}}
+async function action(key){try{await fetch('/api/'+(current?.phase==='connected'?'select':key),{method:'POST'});await refresh()}catch{}}
 document.addEventListener('keydown',e=>{if(e.repeat)return;const k=e.key==='ArrowLeft'?'left':e.key==='ArrowRight'?'right':e.key===' '||e.key==='Enter'?'select':null;if(k){e.preventDefault();action(k)}});
 let gameHeld=false;setInterval(()=>{const p=navigator.getGamepads?.()[0];if(!p){gameHeld=false;return}const k=p.buttons[0]?.pressed?'select':p.buttons[14]?.pressed||p.axes[0]<-.6?'left':p.buttons[15]?.pressed||p.axes[0]>.6?'right':null;if(k&&!gameHeld)action(k);gameHeld=!!k},100);
 const stream=new EventSource('/api/events');stream.onmessage=e=>{current=JSON.parse(e.data);showState(current)};
 refresh();
+setInterval(refresh,60000);
 </script></body></html>
