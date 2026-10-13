@@ -225,6 +225,8 @@ async function choose(){
  }
 }
 async function navigation(direction){
+ // Every physical/API button hangs up an established call.
+ if(phase==='connected'){await choose();return}
  // Selection belongs to the controller, not the SIP call. Never freeze the UI
  // because an endpoint is ringing, busy, unavailable, or reconnecting.
  if(phase==='preparing-call'||phase==='dialing'||phase==='connected'||phase==='incoming')return;
