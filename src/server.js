@@ -17,9 +17,29 @@ if(!/^[a-zA-Z0-9_-]+$/.test(config.dialContext||'from-internal'))throw Error('In
 const basic=Buffer.from(env.ARI_USER+':'+env.ARI_PASSWORD).toString('base64');
 let index=0,phase='idle',intercom=null,contactChannel=null,mediaChannel=null,bridge=null,session=0,remote=null;
 let audioJob=null,audioToken=0,ws=null,ready=false,incoming=null,reconnectTimer=null;
-let lastButton=null,buttonPress=0;
+let lastButton=null,buttonPress=0,activeCall=null;
 const clients=new Set();const rtp=dgram.createSocket('udp4');let seq=0,timestamp=0,ssrc=Math.floor(Math.random()*0xffffffff);
-function state(){return {name:config.contacts[index].name,index,phase,connected:ready,contacts:config.contacts.length,buttons:phase==='connected'?['END','END','END']:['←','CALL','→'],lastButton,buttonPress}}
+// The selected contact is kept independently of the caller actually on the phone.
+function state(){
+ const buttons=phase==='connected'?['END','END','END']:
+  phase==='preparing-call'||phase==='dialing'?['CANCEL','CANCEL','CANCEL']:
+  phase==='incoming'?['','','']:['←','CALL','→'];
+ return {
+  name:activeCall?.name||config.contacts[index].name,
+  selectedContact:config.contacts[index].name,
+  call:activeCall, index, phase, connected:ready,
+  contacts:config.contacts.length, buttons, lastButton, buttonPress
+ };
+}
+// Use the caller ID on the actual incoming ARI channel, not the selected contact.
+function incomingIdentity(channel){
+ const caller=channel?.caller||{};
+ const number=String(caller.number||'').trim();
+ const suppliedName=String(caller.name||'').trim();
+ const known=config.contacts.find(contact=>contact.extension===number);
+ const validName=suppliedName&&!/^(unknown|anonymous|unavailable|restricted)$/i.test(suppliedName);
+ return {direction:'incoming',name:known?.name||(validName?suppliedName:number||'Unknown caller'),number};
+}
 function notify(){const data='data: '+JSON.stringify(state())+'\n\n';for(const res of clients)res.write(data)}
 function setPhase(p){phase=p;notify()}
 async function ari(method,path,body){const res=await fetch(ariUrl+path,{method,headers:{Authorization:'Basic '+basic,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});if(!res.ok)throw Error('ARI '+method+' '+path+' '+res.status+' '+(await res.text()).slice(0,200));const raw=await res.text();return raw?JSON.parse(raw):null}
@@ -143,7 +163,7 @@ function startRingback(stamp){
  stopAudio();ringback=true;ringStep=0;
 }
 function scheduleReconnect(){if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{reconnectTimer=null;if(ready&&phase==='idle')begin().catch(console.error)},2000)}
-function clearSession(){stopAudio();remote=null;intercom=null;contactChannel=null;mediaChannel=null;bridge=null;incoming=null;session++;setPhase('idle')}
+function clearSession(){stopAudio();remote=null;intercom=null;contactChannel=null;mediaChannel=null;bridge=null;incoming=null;activeCall=null;session++;setPhase('idle')}
 async function hang(){const ids=[contactChannel,incoming,intercom,mediaChannel].filter(Boolean);const b=bridge;clearSession();await Promise.allSettled([...ids.map(id=>ari('DELETE','/channels/'+q(id))),...(b?[ari('DELETE','/bridges/'+q(b))]:[])])}
 async function begin(){
  if(phase!=='idle'||!ready)return;
@@ -173,7 +193,7 @@ async function enterMenu(){if(phase!=='calling-intercom'||!intercom)return;const
  }catch(e){console.error('Menu setup failed',e);if(stamp===session){await hang();scheduleReconnect()}}}
 async function returnToMenu(feedback=''){
  if(!bridge||!mediaChannel||!intercom)return;
- const old=contactChannel;contactChannel=null;incoming=null;stopAudio();
+ const old=contactChannel;contactChannel=null;incoming=null;activeCall=null;stopAudio();
  if(old)await ari('DELETE','/channels/'+q(old)).catch(()=>{});
  // The external media channel remains bridged throughout conversations.
  setPhase('menu');say(feedback||config.contacts[index].name);
@@ -183,6 +203,7 @@ async function choose(){
  if(phase==='menu'){
   stopAudio();
   const stamp=session,selected=config.contacts[index];
+  activeCall={direction:'outgoing',name:selected.name,number:selected.extension};
   setPhase('preparing-call');
   // Keep Select responsive while preserving the spoken warning and countdown.
   void (async()=>{
@@ -212,21 +233,24 @@ async function choose(){
   return;
  }
  if(phase==='preparing-call'){
-  stopAudio();
+  stopAudio();activeCall=null;
   setPhase('menu');
   void say('Cancelled');
   return;
  }
  if(phase==='dialing'||phase==='connected'){
   const wasDialing=phase==='dialing';
-  const id=incoming||contactChannel;incoming=null;contactChannel=null;stopAudio();
+  const id=incoming||contactChannel;
+  // Clear visible call state before hanging up: ARI events can arrive mid-request.
+  incoming=null;contactChannel=null;activeCall=null;stopAudio();
+  setPhase('menu');
   if(id)await ari('DELETE','/channels/'+q(id)).catch(console.error);
   await returnToMenu(wasDialing?'Cancelled':'Call ended');return;
  }
 }
 async function navigation(direction){
  // Every physical/API button hangs up an established call.
- if(phase==='connected'){await choose();return}
+ if(phase==='connected'||phase==='preparing-call'||phase==='dialing'){await choose();return}
  // Selection belongs to the controller, not the SIP call. Never freeze the UI
  // because an endpoint is ringing, busy, unavailable, or reconnecting.
  if(phase==='preparing-call'||phase==='dialing'||phase==='connected'||phase==='incoming')return;
@@ -234,13 +258,13 @@ async function navigation(direction){
  notify();
  if(phase==='menu')say(config.contacts[index].name);
 }
-async function handleIncoming(id){
+async function handleIncoming(id,channel){
  if(!bridge||!intercom||!mediaChannel||incoming||phase==='connected'||phase==='dialing'||phase==='preparing-call'){
   // Return to the dialplan fallback instead of leaving the caller stuck.
   await ari('POST','/channels/'+q(id)+'/continue?context=freepbxselect-fallback&extension=s&priority=1').catch(console.error);
   return;
  }
- incoming=id;stopAudio();setPhase('incoming');
+ incoming=id;activeCall=incomingIdentity(channel);stopAudio();setPhase('incoming');
  const stamp=session;
  try{
   // Announce to the intercom BEFORE answering or bridging the caller.
@@ -263,16 +287,18 @@ async function onEvent(ev){
  if(id===intercom&&(ev.type==='ChannelStateChange'||ev.type==='ChannelDestroyed'||ev.type==='StasisStart'||ev.type==='StasisEnd'))
   console.log('Intercom event:',ev.type,'state:',ev.channel?.state,'cause:',ev.cause,'cause_txt:',ev.cause_txt,'channel:',id);
  if(ev.type==='StasisStart'){
-  if(ev.args?.[0]==='incoming'){await handleIncoming(id);return}
+  if(ev.args?.[0]==='incoming'){await handleIncoming(id,ev.channel);return}
   if(id===intercom){await enterMenu();return}
   if(id===contactChannel&&bridge&&phase==='dialing'){
    await boostCaller(id);
    await ari('POST','/bridges/'+q(bridge)+'/addChannel?channel='+q(id));
    stopAudio();setPhase('connected');
   }
+ }else if(ev.type==='ChannelCallerId'&&id===incoming&&activeCall?.direction==='incoming'){
+  activeCall=incomingIdentity(ev.channel);notify();
  }else if(ev.type==='StasisEnd'||ev.type==='ChannelDestroyed'){
   if(id===intercom){await hang();scheduleReconnect()}
-  else if(id===incoming){incoming=null;await returnToMenu('Call ended')}
+  else if(id===incoming){incoming=null;await returnToMenu(phase==='connected'?'Call ended':'Cancelled')}
   else if(id===contactChannel){contactChannel=null;if(phase==='connected'||phase==='dialing')await returnToMenu(phase==='dialing'?'Cancelled':'Call ended')}
   else if(id===mediaChannel&&phase!=='idle'){await hang();scheduleReconnect()}
  }
