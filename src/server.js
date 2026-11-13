@@ -17,7 +17,7 @@ if(!/^[a-zA-Z0-9_-]+$/.test(config.dialContext||'from-internal'))throw Error('In
 const basic=Buffer.from(env.ARI_USER+':'+env.ARI_PASSWORD).toString('base64');
 let index=0,phase='idle',intercom=null,contactChannel=null,mediaChannel=null,bridge=null,session=0,remote=null;
 let audioJob=null,audioToken=0,ws=null,ready=false,incoming=null,reconnectTimer=null;
-let lastButton=null,buttonPress=0,activeCall=null;
+let lastButton=null,buttonPress=0,activeCall=null,shuttingDown=false;
 const clients=new Set();const rtp=dgram.createSocket('udp4');let seq=0,timestamp=0,ssrc=Math.floor(Math.random()*0xffffffff);
 // The selected contact is kept independently of the caller actually on the phone.
 function state(){
@@ -162,11 +162,11 @@ function startRingback(stamp){
  if(stamp!==session||phase!=='dialing')return;
  stopAudio();ringback=true;ringStep=0;
 }
-function scheduleReconnect(){if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{reconnectTimer=null;if(ready&&phase==='idle')begin().catch(console.error)},2000)}
+function scheduleReconnect(){if(shuttingDown)return;if(reconnectTimer)clearTimeout(reconnectTimer);reconnectTimer=setTimeout(()=>{reconnectTimer=null;if(!shuttingDown&&ready&&phase==='idle')begin().catch(console.error)},2000)}
 function clearSession(){stopAudio();remote=null;intercom=null;contactChannel=null;mediaChannel=null;bridge=null;incoming=null;activeCall=null;session++;setPhase('idle')}
 async function hang(){const ids=[contactChannel,incoming,intercom,mediaChannel].filter(Boolean);const b=bridge;clearSession();await Promise.allSettled([...ids.map(id=>ari('DELETE','/channels/'+q(id))),...(b?[ari('DELETE','/bridges/'+q(b))]:[])])}
 async function begin(){
- if(phase!=='idle'||!ready)return;
+ if(shuttingDown||phase!=='idle'||!ready)return;
  const stamp=++session,endpoint=env.INTERCOM_ENDPOINT||'PJSIP/777';
  setPhase('calling-intercom');
  try{
@@ -303,7 +303,35 @@ async function onEvent(ev){
   else if(id===mediaChannel&&phase!=='idle'){await hang();scheduleReconnect()}
  }
 }
-function connect(){const u=new URL(ariUrl);u.protocol=u.protocol==='https:'?'wss:':'ws:';u.pathname=u.pathname.replace(/\/$/,'')+'/events';u.search=new URLSearchParams({app,api_key:env.ARI_USER+':'+env.ARI_PASSWORD}).toString();ws=new WebSocket(u);ws.on('open',()=>{ready=true;notify();scheduleReconnect()});ws.on('message',raw=>{try{onEvent(JSON.parse(raw.toString())).catch(console.error)}catch(e){console.error(e)}});ws.on('close',()=>{ready=false;notify();if(phase!=='idle')hang().catch(console.error);setTimeout(connect,3000)});ws.on('error',e=>console.error('ARI websocket',e.message))}
+// Only reclaim previous FreePBX Select control legs on this configured endpoint.
+// Never hang up unrelated calls to the extension.
+async function recoverControlCall(){
+ const endpoint=env.INTERCOM_ENDPOINT||'PJSIP/777';
+ const identity=env.INTERCOM_CALLER_ID||'FreePBX Select <7000>';
+ const callerNumber=identity.match(/<([^<>]+)>/)?.[1]||'';
+ const callerName=identity.replace(/\\s*<[^<>]+>\\s*$/,'').trim();
+ if(!endpoint.startsWith('PJSIP/')||!callerNumber)return;
+ const channels=await ari('GET','/channels');
+ for(const channel of channels){
+  if(!channel.name?.startsWith(endpoint+'-'))continue;
+  if(channel.caller?.number!==callerNumber||channel.caller?.name!==callerName)continue;
+  console.log('Clearing previous FreePBX Select control call:',channel.id);
+  await ari('DELETE','/channels/'+q(channel.id)).catch(e=>console.error('Stale control call cleanup:',e.message));
+ }
+}
+async function shutdown(){
+ if(shuttingDown)return;
+ shuttingDown=true;
+ if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null}
+ console.log('Stopping FreePBX Select: releasing active Asterisk channels');
+ try{await hang()}catch(e){console.error('Shutdown hangup:',e)}
+ try{ws?.close()}catch{}
+ server.close();
+ rtp.close();
+}
+process.on('SIGTERM',()=>{void shutdown()});
+process.on('SIGINT',()=>{void shutdown()});
+function connect(){const u=new URL(ariUrl);u.protocol=u.protocol==='https:'?'wss:':'ws:';u.pathname=u.pathname.replace(/\/$/,'')+'/events';u.search=new URLSearchParams({app,api_key:env.ARI_USER+':'+env.ARI_PASSWORD}).toString();ws=new WebSocket(u);ws.on('open',()=>{ready=true;notify();if(phase==='idle'&&!shuttingDown){void recoverControlCall().catch(e=>console.error('Control call recovery:',e.message)).finally(()=>{if(!shuttingDown&&ready)scheduleReconnect()})}});ws.on('message',raw=>{try{onEvent(JSON.parse(raw.toString())).catch(console.error)}catch(e){console.error(e)}});ws.on('close',()=>{ready=false;notify();if(shuttingDown)return;if(phase!=='idle')hang().catch(console.error);setTimeout(connect,3000)});ws.on('error',e=>console.error('ARI websocket',e.message))}
 rtp.on('message',(_,rinfo)=>{if(mediaChannel&&!remote)remote={address:rinfo.address,port:rinfo.port}});rtp.bind(rtpPort);
 const html=fs.readFileSync(new URL('./public/index.html',import.meta.url));
 let queue=Promise.resolve();
