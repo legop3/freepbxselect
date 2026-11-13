@@ -298,7 +298,7 @@ async function onEvent(ev){
   activeCall=incomingIdentity(ev.channel);notify();
  }else if(ev.type==='StasisEnd'||ev.type==='ChannelDestroyed'){
   if(id===intercom){await hang();scheduleReconnect()}
-  else if(id===incoming){incoming=null;await returnToMenu(phase==='connected'?'Call ended':'Cancelled')}
+  else if(id===incoming){incoming=null;await returnToMenu('Call ended')}
   else if(id===contactChannel){contactChannel=null;if(phase==='connected'||phase==='dialing')await returnToMenu(phase==='dialing'?'Cancelled':'Call ended')}
   else if(id===mediaChannel&&phase!=='idle'){await hang();scheduleReconnect()}
  }
