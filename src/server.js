@@ -309,7 +309,7 @@ async function recoverControlCall(){
  const endpoint=env.INTERCOM_ENDPOINT||'PJSIP/777';
  const identity=env.INTERCOM_CALLER_ID||'FreePBX Select <7000>';
  const callerNumber=identity.match(/<([^<>]+)>/)?.[1]||'';
- const callerName=identity.replace(/\\s*<[^<>]+>\\s*$/,'').trim();
+ const callerName=identity.replace(/\s*<[^<>]+>\s*$/,'').trim();
  if(!endpoint.startsWith('PJSIP/')||!callerNumber)return;
  const channels=await ari('GET','/channels');
  for(const channel of channels){
